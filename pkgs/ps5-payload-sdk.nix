@@ -11,7 +11,7 @@ let
 
   nativeBuildInputs = with pkgs; [
     unzip
-    # autoPatchelfHook
+    autoPatchelfHook
   ];
 in
 stdenv.mkDerivation {
@@ -23,6 +23,8 @@ stdenv.mkDerivation {
 
   sourceRoot = "./ps5-payload-sdk";
 
+  # dontAutoPatchElf = true;
+  # dontStrip = true;
   dontConfigure = true;
   dontBuild = true;
 
@@ -42,6 +44,12 @@ stdenv.mkDerivation {
 
     runHook postInstall
   '';
+
+  autoPatchelfIgnoreMissingDeps = [ "*.sprx" ];
+
+  # postFixup = ''
+  #   autoPatchElf $out/opt/${pname}/bin
+  # '';
 
   meta = {
     homepage = project_url;
