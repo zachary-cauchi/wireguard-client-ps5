@@ -25,16 +25,20 @@
         overlays = [(import rust-overlay)];
         pkgs = import nixpkgs {
           inherit system overlays;
-        };
+        } // import ./pkgs { inherit pkgs; };
 
         rustToolchain = pkgs.rust-bin.nightly.latest.default.override {
           extensions = ["rust-src" "clippy"];
           # targets = [];
         };
 
-        # define shared build inputs
-        nativeBuildInputs = with pkgs; [rustToolchain pkg-config];
+        nativeBuildInputs = with pkgs; [
+          rustToolchain
+          pkg-config
+          ps5-payload-sdk
+        ];
       in {
+        packages = import ./pkgs { inherit pkgs; };
         devShells.default = pkgs.mkShell {
           name = "wireguard-client-ps5-shell";
 
