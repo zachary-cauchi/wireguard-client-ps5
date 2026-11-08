@@ -13,6 +13,8 @@ let
     unzip
     autoPatchelfHook
   ];
+
+  destDir = "opt/${pname}";
 in
 stdenv.mkDerivation {
   inherit
@@ -21,17 +23,17 @@ stdenv.mkDerivation {
     src
     nativeBuildInputs;
 
-  sourceRoot = "./ps5-payload-sdk";
+  sourceRoot = "./${pname}";
 
-  # dontAutoPatchElf = true;
-  # dontStrip = true;
+  autoPatchelfIgnoreMissingDeps = [ "*.sprx" ];
+
   dontConfigure = true;
   dontBuild = true;
 
   installPhase = ''
     runHook preInstall
 
-    DEST_DIR=$out/opt/${pname}
+    DEST_DIR=$out/${destDir}
 
     mkdir -p $DEST_DIR
     cp -r bin ldscripts samples target toolchain $DEST_DIR/
@@ -42,14 +44,12 @@ stdenv.mkDerivation {
       ln -s "$f" $out/bin/$(basename "$f")
     done
 
+    # Install environment variables pointing to the SDK.
+    mkdir -p $out/nix-support
+    echo "export PS5_PAYLOAD_SDK=$DEST_DIR" > $out/nix-support/setup-hook
+
     runHook postInstall
   '';
-
-  autoPatchelfIgnoreMissingDeps = [ "*.sprx" ];
-
-  # postFixup = ''
-  #   autoPatchElf $out/opt/${pname}/bin
-  # '';
 
   meta = {
     homepage = project_url;
