@@ -1,0 +1,12 @@
+[package]
+name = "wireguard-client-ps5"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ps5 = { git = "https://github.com/neokuze/ps5-rust", features = ["notify", "hw"] }
+
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
