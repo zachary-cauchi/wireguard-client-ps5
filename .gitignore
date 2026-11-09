@@ -30,3 +30,6 @@ rustc-ice-*.txt
 # Added by cargo
 
 /target
+
+# Contains connection variables.
+.env

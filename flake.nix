@@ -51,6 +51,11 @@
 
         nativeBuildInputs = with pkgs; [
           pkg-config
+
+          # Debugging/testing
+          socat
+
+          # SDK and Rust tools
           ps5-payload-sdk
           rustToolchain
           wrappedCargo
