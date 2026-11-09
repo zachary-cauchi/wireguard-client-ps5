@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 ps5 = { git = "https://github.com/neokuze/ps5-rust", features = ["notify", "hw"] }
+ps5-std-rt = { git = "https://github.com/neokuze/ps5-rust" }
 
 [profile.release]
 opt-level = "z"

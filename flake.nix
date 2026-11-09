@@ -33,14 +33,22 @@
         stdTarget = "${ps5-rust}/targets/x86_64-sie-ps5-std.json";
         noStdTarget = "${ps5-rust}/targets/x86_64-sie-ps5.json";
 
+        noStdConfigTomlSrcPath = ".cargo/config.toml";
+        stdConfigTomlSrcPath = "std-examples/.cargo/config.toml";
+
         # Build a `.cargo/config.toml` file based on the `ps5-rust`-provided one,
         # but override the `target` and `linker` paths to point to the Nix-specific locations.
         cargoConfig = (pkgs.formats.toml {}).generate "cargo-ps5-config.toml" (
-          fromTOML (builtins.readFile "${ps5-rust}/.cargo/config.toml")
+          fromTOML (builtins.readFile "${ps5-rust}/${stdConfigTomlSrcPath}")
           // {
-            build.target = noStdTarget;
+            build.target = stdTarget;
 
-            target.x86_64-sie-ps5.linker = "${pkgs.ps5-payload-sdk}/bin/prospero-clang";
+            target.x86_64-sie-ps5-std.linker = "${pkgs.ps5-payload-sdk}/bin/prospero-clang";
+
+            env = {
+              CC_x86_64-sie-ps5-std = "${pkgs.ps5-payload-sdk}/bin/prospero-clang";
+              AR_x86_64-sie-ps5-std = "${pkgs.ps5-payload-sdk}/bin/prospero-ar";
+            };
           }
         );
 
@@ -67,7 +75,7 @@
 
           inherit nativeBuildInputs;
 
-          CARGO_BUILD_TARGET = noStdTarget;
+          CARGO_BUILD_TARGET = stdTarget;
           # Specify the rust-src path (many editors rely on this)
           RUST_SRC_PATH = "${rustToolchain}/lib/rustlib/src/rust/library";
           CARGO_TARGET_CONFIG = "${cargoConfig}";

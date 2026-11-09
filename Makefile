@@ -1,5 +1,5 @@
 ENV_FILE := .env
-ELF_PAYLOAD := target/x86_64-sie-ps5/release/wireguard-client-ps5
+ELF_PAYLOAD := target/x86_64-sie-ps5-std/release/wireguard-client-ps5
 CARGO := cargo-ps5
 
 .SILENT: ${ENV_FILE}
@@ -19,8 +19,9 @@ ${ENV_FILE}:
 ${ELF_PAYLOAD}:
 	${CARGO} build --release
 
-build_release: ${ELF_PAYLOAD}
+build_release:
+	$(MAKE) ${ELF_PAYLOAD}
 
 .PHONY: test_elf
-test_elf: .env build_release
+test_elf: .env ${ELF_PAYLOAD}
 	prospero-deploy ${ELF_PAYLOAD}

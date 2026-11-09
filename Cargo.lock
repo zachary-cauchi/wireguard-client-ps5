@@ -138,6 +138,11 @@ dependencies = [
 ]
 
 [[package]]
+name = "ps5-std-rt"
+version = "0.1.0"
+source = "git+https://github.com/neokuze/ps5-rust#19a6ac08d22ca997f8938ab592dbe74751aa7e45"
+
+[[package]]
 name = "ps5-sys"
 version = "0.1.0"
 source = "git+https://github.com/neokuze/ps5-rust#19a6ac08d22ca997f8938ab592dbe74751aa7e45"
@@ -223,4 +228,5 @@ name = "wireguard-client-ps5"
 version = "0.1.0"
 dependencies = [
  "ps5",
+ "ps5-std-rt",
 ]
