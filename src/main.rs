@@ -2,9 +2,9 @@
 #![no_std]
 #![no_main]
 
-use ps5::{hw, log, Toast};
+use ps5::{Toast, hw, log};
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn main() -> i32 {
     let temp = hw::cpu_temperature().unwrap_or(-1);
     log!("cpu ", temp, "C");

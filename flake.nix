@@ -30,10 +30,31 @@
 
         rustToolchain = pkgs.rust-bin.fromRustupToolchainFile "${ps5-rust}/rust-toolchain.toml";
 
+        cargoConfig = (pkgs.formats.toml {}).generate "cargo-ps5-config.toml" (
+          fromTOML (builtins.readFile "${ps5-rust}/.cargo/config.toml")
+          // {
+            build = {
+              target = noStdTarget;
+            };
+
+            target = {
+              x86_64-sie-ps5 = {
+                linker = "${pkgs.ps5-payload-sdk}/bin/prospero-clang";
+              };
+            };
+
+          }
+        );
+
+        wrappedCargo = (pkgs.writeShellScriptBin "cargo-ps5" ''
+          exec ${rustToolchain}/bin/cargo --config "${cargoConfig}" "$@"
+        '');
+
         nativeBuildInputs = with pkgs; [
-          rustToolchain
           pkg-config
           ps5-payload-sdk
+          rustToolchain
+          wrappedCargo
         ];
 
         stdTarget = "${ps5-rust}/targets/x86_64-sie-ps5-std.json";
@@ -48,6 +69,8 @@
           CARGO_BUILD_TARGET = noStdTarget;
           # Specify the rust-src path (many editors rely on this)
           RUST_SRC_PATH = "${rustToolchain}/lib/rustlib/src/rust/library";
+          CARGO_TARGET_CONFIG = "${cargoConfig}";
+          LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
         };
       });
 }
