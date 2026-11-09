@@ -10,6 +10,7 @@ let
   };
 
   llvmRev = pkgs.llvmPackages;
+  # Bundle all the deps together into an FHS-like layout, similar to the way the SDK expects them to be installed via `apt` or similar.
   llvmDeps = pkgs.symlinkJoin {
     name = "llvm-fhs-like";
     paths = [
@@ -19,6 +20,8 @@ let
       llvmRev.bintools-unwrapped
     ];
   };
+
+  # This script overrides `--bindir` calls to point to the `llvmDeps` pkg. All other args are passed through to `llvm-config`.
   llvmConfigShim = pkgs.writeShellScript "prospero-llvm-config" ''
     if [ "$1" = "--bindir" ]; then
     echo ${llvmDeps}/bin
@@ -41,6 +44,7 @@ stdenv.mkDerivation {
 
   sourceRoot = "./${pname}";
 
+  # Ignore references to SPRX files (which are shared libraries only present in the PS5 OS).
   autoPatchelfIgnoreMissingDeps = [ "*.sprx" ];
 
   dontConfigure = true;
@@ -52,14 +56,8 @@ stdenv.mkDerivation {
     mkdir -p $out
     cp -r bin ldscripts samples target toolchain $out
 
-    # Replace the wrapper script with a
+    # Replace the wrapper script with the shimmed script.
     ln -sf ${llvmConfigShim} $out/bin/prospero-llvm-config
-
-    # ln against the binaries.
-    # mkdir -p $out/bin
-    # for f in $DEST_DIR/bin/*; do
-    #   ln -s "$f" $out/bin/$(basename "$f")
-    # done
 
     patchShebangs $out/bin
 

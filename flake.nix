@@ -30,22 +30,21 @@
 
         rustToolchain = pkgs.rust-bin.fromRustupToolchainFile "${ps5-rust}/rust-toolchain.toml";
 
+        stdTarget = "${ps5-rust}/targets/x86_64-sie-ps5-std.json";
+        noStdTarget = "${ps5-rust}/targets/x86_64-sie-ps5.json";
+
+        # Build a `.cargo/config.toml` file based on the `ps5-rust`-provided one,
+        # but override the `target` and `linker` paths to point to the Nix-specific locations.
         cargoConfig = (pkgs.formats.toml {}).generate "cargo-ps5-config.toml" (
           fromTOML (builtins.readFile "${ps5-rust}/.cargo/config.toml")
           // {
-            build = {
-              target = noStdTarget;
-            };
+            build.target = noStdTarget;
 
-            target = {
-              x86_64-sie-ps5 = {
-                linker = "${pkgs.ps5-payload-sdk}/bin/prospero-clang";
-              };
-            };
-
+            target.x86_64-sie-ps5.linker = "${pkgs.ps5-payload-sdk}/bin/prospero-clang";
           }
         );
 
+        # Wrap `cargo` to always supply the above generated config.toml file.
         wrappedCargo = (pkgs.writeShellScriptBin "cargo-ps5" ''
           exec ${rustToolchain}/bin/cargo --config "${cargoConfig}" "$@"
         '');
@@ -56,9 +55,6 @@
           rustToolchain
           wrappedCargo
         ];
-
-        stdTarget = "${ps5-rust}/targets/x86_64-sie-ps5-std.json";
-        noStdTarget = "${ps5-rust}/targets/x86_64-sie-ps5.json";
       in {
         packages = import ./pkgs { inherit pkgs; };
         devShells.default = pkgs.mkShell {
