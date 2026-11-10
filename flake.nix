@@ -28,7 +28,8 @@
           inherit system overlays;
         } // import ./pkgs { inherit pkgs; };
 
-        rustToolchain = pkgs.rust-bin.fromRustupToolchainFile "${ps5-rust}/rust-toolchain.toml";
+        rustToolchainFile = "${ps5-rust}/rust-toolchain.toml";
+        rustToolchain = pkgs.rust-bin.fromRustupToolchainFile rustToolchainFile;
 
         stdTarget = "${ps5-rust}/targets/x86_64-sie-ps5-std.json";
         noStdTarget = "${ps5-rust}/targets/x86_64-sie-ps5.json";
@@ -62,6 +63,7 @@
 
           # Debugging/testing
           socat
+          rust-analyzer
 
           # SDK and Rust tools
           ps5-payload-sdk
@@ -74,6 +76,14 @@
           name = "wireguard-client-ps5-shell";
 
           inherit nativeBuildInputs;
+
+          shellHook = ''
+            # Set up links to config.toml and rust-toolchain.toml files.
+            # This sorts out LSP target-related errors.
+            mkdir -p .cargo
+            ln -sf "$CARGO_TARGET_CONFIG" .cargo/config.toml
+            ln -sf "${rustToolchainFile}" rust-toolchain.toml
+          '';
 
           CARGO_BUILD_TARGET = stdTarget;
           # Specify the rust-src path (many editors rely on this)
