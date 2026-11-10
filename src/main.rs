@@ -1,3 +1,4 @@
+pub mod config;
 pub mod device;
 pub mod logging;
 pub mod result;
@@ -5,31 +6,38 @@ pub mod tunnel;
 
 use ps5::Toast;
 use ps5_std_rt as _;
-use tracing::{info, instrument, level_filters::LevelFilter, trace};
+use tracing::{error, info, level_filters::LevelFilter};
 
-use crate::logging::Ps5LoggingBuilder;
-pub use crate::result::{Error, Result};
+pub use crate::result::{ErrorKind, Result};
+use crate::{config::get_config, logging::Ps5LoggingBuilder, result::WrapWithMsg};
 
-pub fn main() {
+fn main() {
     Ps5LoggingBuilder::new()
         .with_klog_level(LevelFilter::TRACE)
-        .with_std_level(LevelFilter::INFO)
+        .with_std_level(LevelFilter::DEBUG)
         .install_global()
         .expect("Global logging set up successfully");
 
     if let Err(e) = main_loop() {
-        klog_log!("Error from main loop. Error code: {}", e.0);
+        if let ErrorKind::PendingConfig = e.kind() {
+            error!("No app configuration found. Add one, then rerun.");
+
+            let _ = Toast::new("No app config found.")
+                .sub("App config needed.")
+                .send();
+        } else {
+            error!("Error from main loop. Error: {}", e);
+        }
+
+        return;
     }
 }
 
-#[instrument()]
-fn main_loop() -> ps5::Result<()> {
+fn main_loop() -> Result<()> {
     info!("Wireguard client initialised.");
-    trace!("Testing trace");
 
-    Toast::new("Hello from STD Rust.")
-        .sub("Pretty cool huh?")
-        .send()?;
+    let config = get_config().context("Getting app config")?;
+    // Toast::new("Starting Wireguard client.").send()?;
 
     Ok(())
 }

@@ -1,26 +1,142 @@
-use std::fmt::Display;
+use std::{borrow::Cow, fmt::Display, io};
 
 use tracing::subscriber::SetGlobalDefaultError;
 
+/// Root, program-wide error struct.
 #[derive(Debug)]
-pub enum Error {
-    GlobalLogging,
+pub struct Error {
+    msg: Cow<'static, str>,
+    kind: ErrorKind,
+}
+
+impl Error {
+    pub fn new(kind: ErrorKind) -> Self {
+        Self {
+            msg: Cow::Borrowed(""),
+            kind,
+        }
+    }
+
+    pub fn with_msg(self, msg: Cow<'static, str>) -> Self {
+        Self {
+            msg,
+            kind: self.kind,
+        }
+    }
+
+    pub fn kind(&self) -> &ErrorKind {
+        &self.kind
+    }
 }
 
 impl Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "App error caused by '{}'. Context: {}",
+            self.kind, self.msg
+        )
+    }
+}
+
+#[derive(Debug)]
+pub enum ErrorKind {
+    /// Errors setting up logging.
+    GlobalLogging,
+    /// No configuration found.
+    PendingConfig,
+    /// File IO-related errors.
+    FileIO(io::Error),
+    /// General PS5 library error.
+    Ps5(ps5::Error),
+}
+
+impl Display for ErrorKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::GlobalLogging => write!(f, "Global logging initialisation failed"),
+            Self::PendingConfig => write!(f, "No valid configuration found yet"),
+            Self::Ps5(e) => write!(f, "PS5 error '{}'", e.0),
+            Self::FileIO(e) => write!(f, "File I/O error ({e})"),
         }
     }
 }
 
-impl std::error::Error for Error {}
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match &self.kind {
+            ErrorKind::FileIO(e) => Some(e),
+            ErrorKind::Ps5(_) | ErrorKind::GlobalLogging | ErrorKind::PendingConfig => None,
+        }
+    }
+}
 
-impl From<SetGlobalDefaultError> for Error {
+impl From<SetGlobalDefaultError> for ErrorKind {
     fn from(_: SetGlobalDefaultError) -> Self {
         Self::GlobalLogging
     }
 }
 
+impl From<io::Error> for ErrorKind {
+    fn from(value: io::Error) -> Self {
+        Self::FileIO(value)
+    }
+}
+
+impl From<ps5::Error> for ErrorKind {
+    fn from(value: ps5::Error) -> Self {
+        Self::Ps5(value)
+    }
+}
+
+impl<E> From<E> for Error
+where
+    E: Into<ErrorKind>,
+{
+    fn from(value: E) -> Self {
+        Self::new(value.into())
+    }
+}
+
 pub type Result<T> = std::result::Result<T, Error>;
+
+/// Trait for adding a contextual message string in case of [Result::Err].
+pub trait WrapWithMsg<T, Msg> {
+    fn context(self, msg: Msg) -> Result<T>;
+    fn with_context(self, msg_f: impl FnOnce() -> Msg) -> Result<T>;
+}
+
+impl<T, E, Msg> WrapWithMsg<T, Msg> for std::result::Result<T, E>
+where
+    E: Into<Error>,
+    Msg: Into<Cow<'static, str>>,
+{
+    /// Add a context msg describing the result in case of failure.
+    ///
+    /// Example:
+    /// ```rust
+    /// std::fs::create_dir(ROOT_DIR_STR)
+    ///     .context("Creating root data dir")?;
+    /// ```
+    fn context(self, msg: Msg) -> Result<T> {
+        match self {
+            Ok(val) => Ok(val),
+            Err(e) => Err(e.into().with_msg(msg.into())),
+        }
+    }
+
+    /// Add a context msg - supplied by the given closure -
+    /// describing the result in case of failure.
+    ///
+    /// Example:
+    /// ```rust
+    /// std::fs::create_dir(ROOT_DIR_STR)
+    ///     .with_context(|| "Creating root data dir")?;
+    /// ```
+    fn with_context(self, msg_f: impl FnOnce() -> Msg) -> Result<T> {
+        match self {
+            Ok(val) => Ok(val),
+            Err(e) => Err(e.into().with_msg(msg_f().into())),
+        }
+    }
+}
