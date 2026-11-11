@@ -1,4 +1,8 @@
-use std::{borrow::Cow, fmt::Display, io};
+use std::{
+    borrow::Cow,
+    fmt::{Debug, Display},
+    io,
+};
 
 use tracing::subscriber::SetGlobalDefaultError;
 
@@ -47,26 +51,36 @@ pub enum ErrorKind {
     PendingConfig,
     /// File IO-related errors.
     FileIO(io::Error),
+    TomlDeserialization(Box<toml::de::Error>),
+    /// Config file loading error.
+    ConfigLoadError(&'static str),
     /// General PS5 library error.
     Ps5(ps5::Error),
 }
 
 impl Display for ErrorKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use ErrorKind::*;
+
         match self {
-            Self::GlobalLogging => write!(f, "Global logging initialisation failed"),
-            Self::PendingConfig => write!(f, "No valid configuration found yet"),
-            Self::Ps5(e) => write!(f, "PS5 error '{}'", e.0),
-            Self::FileIO(e) => write!(f, "File I/O error ({e})"),
+            GlobalLogging => write!(f, "Global logging initialisation failed"),
+            PendingConfig => write!(f, "No valid configuration found yet"),
+            Ps5(e) => write!(f, "PS5 error '{}'", e.0),
+            FileIO(_) => write!(f, "File I/O error"),
+            ConfigLoadError(_) => write!(f, "Error loading/parsing config"),
+            TomlDeserialization(_) => write!(f, "TOML deserialization error"),
         }
     }
 }
 
 impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        use ErrorKind::*;
+
         match &self.kind {
-            ErrorKind::FileIO(e) => Some(e),
-            ErrorKind::Ps5(_) | ErrorKind::GlobalLogging | ErrorKind::PendingConfig => None,
+            FileIO(e) => Some(e),
+            TomlDeserialization(e) => Some(e),
+            Ps5(_) | GlobalLogging | PendingConfig | ConfigLoadError(_) => None,
         }
     }
 }
@@ -86,6 +100,12 @@ impl From<io::Error> for ErrorKind {
 impl From<ps5::Error> for ErrorKind {
     fn from(value: ps5::Error) -> Self {
         Self::Ps5(value)
+    }
+}
+
+impl From<toml::de::Error> for ErrorKind {
+    fn from(value: toml::de::Error) -> Self {
+        Self::TomlDeserialization(Box::new(value))
     }
 }
 

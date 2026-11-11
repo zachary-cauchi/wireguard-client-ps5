@@ -34,10 +34,12 @@ fn main() {
 }
 
 fn main_loop() -> Result<()> {
-    info!("Wireguard client initialised.");
+    info!("Initialising Wireguard client.");
 
+    Toast::new("Initialising Wireguard client.").send()?;
     let config = get_config().context("Getting app config")?;
-    // Toast::new("Starting Wireguard client.").send()?;
+
+    info!("Config file loaded.");
 
     Ok(())
 }
