@@ -1,14 +1,14 @@
 use std::{
     fs::File,
     io::Write,
-    net::{IpAddr, Ipv4Addr},
+    net::IpAddr,
     path::{Path, PathBuf},
     str::FromStr,
 };
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Deserializer, de};
-use tracing::{Level, debug, instrument, warn};
+use tracing::{debug, instrument, warn};
 
 use crate::{
     ErrorKind, Result,
@@ -20,7 +20,7 @@ pub const CFG_FILENAME: &str = "wg0.toml";
 
 /// Load the config file, returning an error if the config file/data dir
 /// are not yet created.
-pub fn get_config() -> Result<WgQuickConfig> {
+pub fn get_config() -> Result<Config> {
     if !Path::new(ROOT_DIR_STR).exists() {
         warn!("Data dir not yet initialised.");
 
@@ -63,7 +63,7 @@ pub fn setup_empty_dir() -> Result<()> {
 }
 
 #[instrument()]
-fn load_config_file(path: &Path) -> Result<WgQuickConfig> {
+fn load_config_file(path: &Path) -> Result<Config> {
     let contents = std::fs::read_to_string(path).context("Opening config file")?;
 
     toml::from_str(&contents)
@@ -71,24 +71,24 @@ fn load_config_file(path: &Path) -> Result<WgQuickConfig> {
 }
 
 #[derive(Deserialize)]
-pub struct WgQuickConfig {
-    interface: Interface,
-    peer: Peer,
+pub struct Config {
+    pub interface: Interface,
+    pub peer: Peer,
 }
 
 #[derive(Deserialize)]
 pub struct Interface {
-    private_key: PrivateKey,
-    address: IpCidr,
-    dns: String,
+    pub private_key: PrivateKey,
+    pub address: IpCidr,
+    pub dns: String,
 }
 
 #[derive(Deserialize)]
 pub struct Peer {
-    public_key: PublicKey,
-    preshared_key: PresharedKey,
-    endpoint: String,
-    allowed_ips: Vec<IpCidr>,
+    pub public_key: PublicKey,
+    pub preshared_key: PresharedKey,
+    pub endpoint: String,
+    pub allowed_ips: Vec<IpCidr>,
 }
 
 fn deserialize_base64_str<'de, D>(deserializer: D) -> std::result::Result<Vec<u8>, D::Error>
@@ -105,27 +105,35 @@ pub struct IpCidr {
     subnet: u8,
 }
 
-pub struct PrivateKey(Vec<u8>);
-pub struct PresharedKey(Vec<u8>);
-pub struct PublicKey(Vec<u8>);
+pub struct PrivateKey(pub Vec<u8>);
+pub struct PresharedKey(pub Vec<u8>);
+pub struct PublicKey(pub Vec<u8>);
 
-macro_rules! impl_base64_newtype {
-    ($newtype:ident) => {
+macro_rules! impl_base64_key_newtype {
+    ($newtype:ident, $len:literal) => {
         impl<'de> Deserialize<'de> for $newtype {
             fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
             where
                 D: Deserializer<'de>,
             {
                 let val = deserialize_base64_str(deserializer)?;
+
+                if val.len() != $len {
+                    return Err(de::Error::invalid_length(
+                        val.len(),
+                        &stringify!(key $len bytes long),
+                    ));
+                }
+
                 Ok(Self(val))
             }
         }
     };
 }
 
-impl_base64_newtype!(PrivateKey);
-impl_base64_newtype!(PresharedKey);
-impl_base64_newtype!(PublicKey);
+impl_base64_key_newtype!(PrivateKey, 32);
+impl_base64_key_newtype!(PresharedKey, 32);
+impl_base64_key_newtype!(PublicKey, 32);
 
 impl<'de> Deserialize<'de> for IpCidr {
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>

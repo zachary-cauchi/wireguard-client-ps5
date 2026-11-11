@@ -54,6 +54,8 @@ pub enum ErrorKind {
     TomlDeserialization(Box<toml::de::Error>),
     /// Config file loading error.
     ConfigLoadError(&'static str),
+    /// Bad key value/format.
+    BadKey(&'static str),
     /// General PS5 library error.
     Ps5(ps5::Error),
 }
@@ -67,6 +69,7 @@ impl Display for ErrorKind {
             PendingConfig => write!(f, "No valid configuration found yet"),
             Ps5(e) => write!(f, "PS5 error '{}'", e.0),
             FileIO(_) => write!(f, "File I/O error"),
+            BadKey(msg) => write!(f, "Bad key value or format ({msg})"),
             ConfigLoadError(_) => write!(f, "Error loading/parsing config"),
             TomlDeserialization(_) => write!(f, "TOML deserialization error"),
         }
@@ -80,7 +83,7 @@ impl std::error::Error for Error {
         match &self.kind {
             FileIO(e) => Some(e),
             TomlDeserialization(e) => Some(e),
-            Ps5(_) | GlobalLogging | PendingConfig | ConfigLoadError(_) => None,
+            Ps5(_) | GlobalLogging | PendingConfig | ConfigLoadError(_) | BadKey(_) => None,
         }
     }
 }

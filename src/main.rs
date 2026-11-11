@@ -9,7 +9,7 @@ use ps5_std_rt as _;
 use tracing::{error, info, level_filters::LevelFilter};
 
 pub use crate::result::{ErrorKind, Result};
-use crate::{config::get_config, logging::Ps5LoggingBuilder, result::WrapWithMsg};
+use crate::{config::get_config, logging::Ps5LoggingBuilder, result::WrapWithMsg, tunnel::Tunnel};
 
 fn main() {
     Ps5LoggingBuilder::new()
@@ -40,6 +40,10 @@ fn main_loop() -> Result<()> {
     let config = get_config().context("Getting app config")?;
 
     info!("Config file loaded.");
+
+    let tunnel = Tunnel::init(&config)?;
+
+    info!("Tunnel initialised.");
 
     Ok(())
 }
