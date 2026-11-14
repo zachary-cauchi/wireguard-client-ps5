@@ -101,8 +101,8 @@ where
 }
 
 pub struct IpCidr {
-    ip_addr: IpAddr,
-    subnet: u8,
+    pub ip_addr: IpAddr,
+    pub subnet: u8,
 }
 
 pub struct PrivateKey(pub Vec<u8>);

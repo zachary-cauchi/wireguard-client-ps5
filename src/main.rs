@@ -4,6 +4,8 @@ pub mod logging;
 pub mod result;
 pub mod tunnel;
 
+use std::sync::Arc;
+
 use ps5::Toast;
 use ps5_std_rt as _;
 use tracing::{error, info, level_filters::LevelFilter};
@@ -11,14 +13,15 @@ use tracing::{error, info, level_filters::LevelFilter};
 pub use crate::result::{ErrorKind, Result};
 use crate::{config::get_config, logging::Ps5LoggingBuilder, result::WrapWithMsg, tunnel::Tunnel};
 
-fn main() {
+#[tokio::main]
+async fn main() {
     Ps5LoggingBuilder::new()
         .with_klog_level(LevelFilter::TRACE)
-        .with_std_level(LevelFilter::DEBUG)
+        .with_std_level(LevelFilter::TRACE)
         .install_global()
         .expect("Global logging set up successfully");
 
-    if let Err(e) = main_loop() {
+    if let Err(e) = main_loop().await {
         if let ErrorKind::PendingConfig = e.kind() {
             error!("No app configuration found. Add one, then rerun.");
 
@@ -33,17 +36,24 @@ fn main() {
     }
 }
 
-fn main_loop() -> Result<()> {
+async fn main_loop() -> Result<()> {
     info!("Initialising Wireguard client.");
 
     Toast::new("Initialising Wireguard client.").send()?;
-    let config = get_config().context("Getting app config")?;
+    let config = Arc::new(get_config().context("Getting app config")?);
 
     info!("Config file loaded.");
 
-    let tunnel = Tunnel::init(&config)?;
+    let mut tunnel = Tunnel::init(config.clone())
+        .await
+        .context("Initialising Wireguard tunnel")?;
 
     info!("Tunnel initialised.");
+
+    info!("Performing handshake.");
+
+    // tunnel.runtime_loop()?;
+    tunnel.first_handshake().await?;
 
     Ok(())
 }

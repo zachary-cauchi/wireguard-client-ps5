@@ -37,7 +37,7 @@ impl Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "App error caused by '{}'. Context: {}",
+            "App error caused by '{}'. Context: \"{}\"",
             self.kind, self.msg
         )
     }
@@ -68,7 +68,7 @@ impl Display for ErrorKind {
             GlobalLogging => write!(f, "Global logging initialisation failed"),
             PendingConfig => write!(f, "No valid configuration found yet"),
             Ps5(e) => write!(f, "PS5 error '{}'", e.0),
-            FileIO(_) => write!(f, "File I/O error"),
+            FileIO(e) => write!(f, "File I/O error ({e})"),
             BadKey(msg) => write!(f, "Bad key value or format ({msg})"),
             ConfigLoadError(_) => write!(f, "Error loading/parsing config"),
             TomlDeserialization(_) => write!(f, "TOML deserialization error"),
