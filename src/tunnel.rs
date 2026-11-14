@@ -1,12 +1,18 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use boringtun::noise::TunnResult;
+use boringtun::noise::errors::WireGuardError;
 use boringtun::{noise::Tunn, x25519::StaticSecret};
 use tokio::net::UdpSocket;
+use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, instrument, trace, warn};
 
 use crate::Result;
 use crate::config::{Config, PresharedKey, PrivateKey, PublicKey};
+
+const MAX_BUF_SIZE: usize = 1024 * 64;
 
 /// Represents a single-peer WireGuard tunnel connection.
 /// Contains all the necessary logic to transmit and receive from the tunnel,
@@ -15,7 +21,7 @@ pub struct Tunnel {
     config: Arc<Config>,
 
     /// Actual Wireguard protocol-handling logic.
-    tunn: Tunn,
+    tunn: Mutex<Tunn>,
 
     /// Socket used to communicate to the peer.
     udp_socket: UdpSocket,
@@ -51,17 +57,41 @@ impl Tunnel {
 
         Ok(Self {
             config,
-            tunn,
+            tunn: Mutex::new(tunn),
             udp_socket: udp,
         })
     }
 
-    pub async fn first_handshake(&mut self) -> Result<()> {
-        let mut buf = [0u8; 1024 * 64];
+    /// Maintains the Wireguard tunnel by running routine steps handled by `boringtun`.
+    /// A buffer is kept on-stack and reused throughout the lifetime of this function.
+    /// Returns on token cancellation.
+    pub async fn maintenance_task(&self, token: CancellationToken) -> Result<()> {
+        let mut buffer = [0; MAX_BUF_SIZE];
 
-        let handshake = self.tunn.format_handshake_initiation(&mut buf, false);
+        loop {
+            buffer.fill(0);
 
-        self.process_tunnel_result(handshake).await?;
+            tokio::select! {
+                res = self.maintenance_entry(&mut buffer) => {
+                    match res {
+                        Ok(_) => tokio::time::sleep(Duration::from_millis(250)).await,
+                        Err(e) => warn!("Error from maintenance task. Error: {e}"),
+                    }
+                },
+                _ = token.cancelled() => {
+                    debug!("Cancellation caught. exiting.");
+
+                    return Ok(());
+                }
+            }
+        }
+    }
+
+    #[instrument(name = "tunnel_maintenance", skip_all)]
+    async fn maintenance_entry(&self, mut buf: &mut [u8]) -> Result<()> {
+        let tunn_result = self.tunn.lock().await.update_timers(&mut buf);
+
+        self.process_tunnel_result(tunn_result).await?;
 
         Ok(())
     }
@@ -73,46 +103,71 @@ impl Tunnel {
 
         debug!("Updating timers.");
 
-        let tunn_result = self.tunn.update_timers(&mut buf);
+        let tunn_result = self.tunn.lock().await.update_timers(&mut buf);
 
         self.process_tunnel_result(tunn_result).await?;
 
         Ok(())
     }
 
-    async fn process_tunnel_result<'a>(&'a mut self, res: TunnResult<'a>) -> Result<()> {
+    /// Processes a `TunnResult` returned by `tunn`.
+    /// * Sends pending packets to the Wireguard endpoint.
+    /// * Sends handshake packets on initial connection or expired connections.
+    ///     * Does so recursively.
+    async fn process_tunnel_result<'a>(&'a self, res: TunnResult<'a>) -> Result<()> {
         match res {
-            TunnResult::Done => debug!("Nothing to send right now."),
+            TunnResult::Done => {}
             TunnResult::WriteToNetwork(pkt) => {
                 debug!("Writing {}-byte to network. Packet: {pkt:?}", pkt.len());
 
-                let mut pending_bytes = pkt;
-
-                loop {
-                    let sent_bytes = self
-                        .udp_socket
-                        .send_to(pending_bytes, &self.config.peer.endpoint)
-                        .await?;
-
-                    if sent_bytes == pending_bytes.len() {
-                        trace!("Packet sent.");
-                        break;
-                    } else {
-                        trace!("Sent {sent_bytes} bytes.");
-                        pending_bytes = &mut pending_bytes[sent_bytes..];
-                    }
-                }
+                self.send_to_endpoint(pkt).await?;
             }
             TunnResult::WriteToTunnelV4(pkt, addr) => {
-                debug!("Sending pkt to '{addr}'. Packet: {pkt:?}")
+                debug!("Sending pkt to '{addr}' (TO BE IMPLEMENTED). Packet: {pkt:?}")
             }
             TunnResult::WriteToTunnelV6(pkt, addr) => {
-                debug!("Sending pkt to '{addr}'. Packet: {pkt:?}")
+                debug!("Sending pkt to '{addr}' (TO BE IMPLEMENTED). Packet: {pkt:?}")
             }
-            TunnResult::Err(e) => warn!("Error received updating timers. Error: {e:?}"),
+            // If the connection expired, re-run the handshake procedure.
+            TunnResult::Err(WireGuardError::ConnectionExpired) => {
+                debug!("New connection needed. Sending handshake.");
+                let mut buf = vec![0u8; MAX_BUF_SIZE];
+                let handshake_res = self
+                    .tunn
+                    .lock()
+                    .await
+                    .format_handshake_initiation(&mut buf[..], false);
+
+                // The boxed pin allows for the async recursion.
+                Box::pin(async move { self.process_tunnel_result(handshake_res).await }).await?;
+            }
+            TunnResult::Err(e) => warn!("Error received from tunnel. Error: {e:?}"),
         }
 
         Ok(())
+    }
+
+    /// Send all bytes in the given slice to the Wireguard endpoint.
+    /// If not all the packet was sent, the a sub-slice is taken over the remaining bytes
+    /// and that slice is sent, repeating as needed until the full original slice was sent.
+    async fn send_to_endpoint(&self, pkt: &[u8]) -> Result<()> {
+        let mut pending_bytes = pkt;
+
+        loop {
+            let sent_bytes = self
+                .udp_socket
+                .send_to(pending_bytes, &self.config.peer.endpoint)
+                .await?;
+
+            trace!("Sent {sent_bytes} bytes.");
+
+            if sent_bytes == pending_bytes.len() {
+                trace!("Packet sent successfully.");
+                return Ok(());
+            } else {
+                pending_bytes = &pending_bytes[sent_bytes..];
+            }
+        }
     }
 }
 

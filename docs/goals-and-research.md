@@ -29,3 +29,13 @@
 * Outlines the limitations and challenges encountered on getting tailscale working on the PS5.
   * Several limitations:
     * No tunnel devices, meaning no kernel-level routing.
+
+### [onetun](https://github.com/aramperes/onetun)
+
+* A TUN-less Wireguard client based on `boringtun` and `smoltcp`.
+  * `boringtun` handles the Wireguard protocol stuff while `smoltcp` does packet conversion and routing.
+  * Seems to accomplish the same requirements and should thus serve as a good reference.
+
+### [smoltcp](https://github.com/smoltcp-rs/smoltcp)
+
+* A TCP/IP stack
