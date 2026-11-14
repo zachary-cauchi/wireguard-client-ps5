@@ -4,6 +4,7 @@ use std::{
     io,
 };
 
+use tokio::task::JoinError;
 use tracing::subscriber::SetGlobalDefaultError;
 
 /// Root, program-wide error struct.
@@ -58,6 +59,7 @@ pub enum ErrorKind {
     BadKey(&'static str),
     /// General PS5 library error.
     Ps5(ps5::Error),
+    TaskJoining(Box<JoinError>),
 }
 
 impl Display for ErrorKind {
@@ -72,6 +74,7 @@ impl Display for ErrorKind {
             BadKey(msg) => write!(f, "Bad key value or format ({msg})"),
             ConfigLoadError(_) => write!(f, "Error loading/parsing config"),
             TomlDeserialization(_) => write!(f, "TOML deserialization error"),
+            TaskJoining(e) => write!(f, "Task operation failed. Error: {e}"),
         }
     }
 }
@@ -83,6 +86,7 @@ impl std::error::Error for Error {
         match &self.kind {
             FileIO(e) => Some(e),
             TomlDeserialization(e) => Some(e),
+            TaskJoining(e) => Some(e),
             Ps5(_) | GlobalLogging | PendingConfig | ConfigLoadError(_) | BadKey(_) => None,
         }
     }
@@ -109,6 +113,12 @@ impl From<ps5::Error> for ErrorKind {
 impl From<toml::de::Error> for ErrorKind {
     fn from(value: toml::de::Error) -> Self {
         Self::TomlDeserialization(Box::new(value))
+    }
+}
+
+impl From<JoinError> for ErrorKind {
+    fn from(value: JoinError) -> Self {
+        Self::TaskJoining(Box::new(value))
     }
 }
 

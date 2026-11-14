@@ -90,6 +90,12 @@ async fn spawn_tasks(
     }
 
     {
+        let tunnel = tunnel.clone();
+        let token = token.clone();
+        tasks.spawn(async move { tunnel.rx_task(token).await });
+    }
+
+    {
         let token = token.clone();
         tasks.spawn(async move { cancellation_task(token).await });
     }

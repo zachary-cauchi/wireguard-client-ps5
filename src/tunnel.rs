@@ -1,3 +1,4 @@
+use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -6,11 +7,13 @@ use boringtun::noise::errors::WireGuardError;
 use boringtun::{noise::Tunn, x25519::StaticSecret};
 use tokio::net::UdpSocket;
 use tokio::sync::Mutex;
+use tokio::task::spawn_blocking;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, instrument, trace, warn};
 
-use crate::Result;
 use crate::config::{Config, PresharedKey, PrivateKey, PublicKey};
+use crate::result::{Error, WrapWithMsg};
+use crate::{ErrorKind, Result};
 
 const MAX_BUF_SIZE: usize = 1024 * 64;
 
@@ -49,11 +52,16 @@ impl Tunnel {
             None,
         );
 
+        let socket_addr = get_or_resolve_peer_endpoint_addr(&config)
+            .await
+            .context("Getting or resolving peer endpoint addr")?;
+
         debug!("Building UDP socket.");
 
         let udp = UdpSocket::bind("0.0.0.0:0").await?;
+        udp.connect(&socket_addr).await?;
 
-        debug!("Done, returning.");
+        debug!("Socket connected to peer {socket_addr}.");
 
         Ok(Self {
             config,
@@ -66,7 +74,7 @@ impl Tunnel {
     /// A buffer is kept on-stack and reused throughout the lifetime of this function.
     /// Returns on token cancellation.
     pub async fn maintenance_task(&self, token: CancellationToken) -> Result<()> {
-        let mut buffer = [0; MAX_BUF_SIZE];
+        let mut buffer = [0u8; MAX_BUF_SIZE];
 
         loop {
             buffer.fill(0);
@@ -96,16 +104,33 @@ impl Tunnel {
         Ok(())
     }
 
-    pub async fn runtime_loop(&mut self) -> Result<()> {
-        let mut buf = [0u8; 1024 * 64];
+    pub async fn rx_task(&self, token: CancellationToken) -> Result<()> {
+        let mut rx_buf = [0u8; MAX_BUF_SIZE];
 
-        // let handshake = self.tunn.format_handshake_initiation(&mut buf, false);
+        loop {
+            rx_buf.fill(0);
 
-        debug!("Updating timers.");
+            tokio::select! {
+                res = self.rx_entry(&mut rx_buf) => {
+                    if let Err(e) = res {
+                        warn!("Error from maintenance task. Error: {e}");
+                    }
+                },
+                _ = token.cancelled() => {
+                    debug!("Cancellation caught. exiting.");
 
-        let tunn_result = self.tunn.lock().await.update_timers(&mut buf);
+                    return Ok(());
+                }
+            }
+        }
+    }
 
-        self.process_tunnel_result(tunn_result).await?;
+    async fn rx_entry(&self, rx_buf: &mut [u8]) -> Result<()> {
+        let total_rx_bytes = self.udp_socket.recv(rx_buf).await?;
+
+        let received = &rx_buf[0..total_rx_bytes];
+
+        trace!("Received {total_rx_bytes}-byte packet. Packet: {received:?}");
 
         Ok(())
     }
@@ -154,10 +179,7 @@ impl Tunnel {
         let mut pending_bytes = pkt;
 
         loop {
-            let sent_bytes = self
-                .udp_socket
-                .send_to(pending_bytes, &self.config.peer.endpoint)
-                .await?;
+            let sent_bytes = self.udp_socket.send(pending_bytes).await?;
 
             trace!("Sent {sent_bytes} bytes.");
 
@@ -169,6 +191,19 @@ impl Tunnel {
             }
         }
     }
+}
+
+/// Get the peer endpoint socket address or resolve it if it's a hostname.
+async fn get_or_resolve_peer_endpoint_addr(config: &Arc<Config>) -> Result<SocketAddr> {
+    let endpoint = config.peer.endpoint.clone();
+
+    let mut socket_addr_iter = endpoint.to_socket_addrs()?;
+
+    socket_addr_iter
+        .next()
+        .ok_or(Error::new(ErrorKind::ConfigLoadError(
+            "Bad or empty peer endpoint address",
+        )))
 }
 
 fn try_get_static_secret(private_key: &PrivateKey) -> Result<StaticSecret> {
