@@ -4,6 +4,7 @@ use std::{
     io,
 };
 
+use boringtun::noise::errors::WireGuardError;
 use tokio::task::JoinError;
 use tracing::subscriber::SetGlobalDefaultError;
 
@@ -22,9 +23,9 @@ impl Error {
         }
     }
 
-    pub fn with_msg(self, msg: Cow<'static, str>) -> Self {
+    pub fn with_msg(self, msg: impl Into<Cow<'static, str>>) -> Self {
         Self {
-            msg,
+            msg: msg.into(),
             kind: self.kind,
         }
     }
@@ -60,6 +61,7 @@ pub enum ErrorKind {
     /// General PS5 library error.
     Ps5(ps5::Error),
     TaskJoining(Box<JoinError>),
+    TunnelError(WireGuardError),
 }
 
 impl Display for ErrorKind {
@@ -75,6 +77,7 @@ impl Display for ErrorKind {
             ConfigLoadError(_) => write!(f, "Error loading/parsing config"),
             TomlDeserialization(_) => write!(f, "TOML deserialization error"),
             TaskJoining(e) => write!(f, "Task operation failed. Error: {e}"),
+            TunnelError(e) => write!(f, "Wireguard error ({e:?})"),
         }
     }
 }
@@ -87,7 +90,8 @@ impl std::error::Error for Error {
             FileIO(e) => Some(e),
             TomlDeserialization(e) => Some(e),
             TaskJoining(e) => Some(e),
-            Ps5(_) | GlobalLogging | PendingConfig | ConfigLoadError(_) | BadKey(_) => None,
+            TunnelError(_) | Ps5(_) | GlobalLogging | PendingConfig | ConfigLoadError(_)
+            | BadKey(_) => None,
         }
     }
 }
@@ -119,6 +123,12 @@ impl From<toml::de::Error> for ErrorKind {
 impl From<JoinError> for ErrorKind {
     fn from(value: JoinError) -> Self {
         Self::TaskJoining(Box::new(value))
+    }
+}
+
+impl From<WireGuardError> for ErrorKind {
+    fn from(value: WireGuardError) -> Self {
+        Self::TunnelError(value)
     }
 }
 

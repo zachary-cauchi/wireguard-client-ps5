@@ -1,18 +1,18 @@
+pub mod maintenance_subsystem;
+pub mod rx_subsystem;
+
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::Arc;
-use std::time::Duration;
 
-use boringtun::noise::TunnResult;
-use boringtun::noise::errors::WireGuardError;
 use boringtun::{noise::Tunn, x25519::StaticSecret};
 use tokio::net::UdpSocket;
 use tokio::sync::Mutex;
-use tokio::task::spawn_blocking;
-use tokio_util::sync::CancellationToken;
 use tracing::{debug, instrument, trace, warn};
 
 use crate::config::{Config, PresharedKey, PrivateKey, PublicKey};
 use crate::result::{Error, WrapWithMsg};
+use crate::tunnel::maintenance_subsystem::MaintenanceSubsystem;
+use crate::tunnel::rx_subsystem::RxSubsystem;
 use crate::{ErrorKind, Result};
 
 const MAX_BUF_SIZE: usize = 1024 * 64;
@@ -27,7 +27,7 @@ pub struct Tunnel {
     tunn: Mutex<Tunn>,
 
     /// Socket used to communicate to the peer.
-    udp_socket: UdpSocket,
+    endpoint: UdpEndpoint,
 }
 
 impl Tunnel {
@@ -58,138 +58,23 @@ impl Tunnel {
 
         debug!("Building UDP socket.");
 
-        let udp = UdpSocket::bind("0.0.0.0:0").await?;
-        udp.connect(&socket_addr).await?;
+        let endpoint = UdpEndpoint::new(socket_addr).await?;
 
         debug!("Socket connected to peer {socket_addr}.");
 
         Ok(Self {
             config,
             tunn: Mutex::new(tunn),
-            udp_socket: udp,
+            endpoint,
         })
     }
 
-    /// Maintains the Wireguard tunnel by running routine steps handled by `boringtun`.
-    /// A buffer is kept on-stack and reused throughout the lifetime of this function.
-    /// Returns on token cancellation.
-    pub async fn maintenance_task(&self, token: CancellationToken) -> Result<()> {
-        let mut buffer = [0u8; MAX_BUF_SIZE];
-
-        loop {
-            buffer.fill(0);
-
-            tokio::select! {
-                res = self.maintenance_entry(&mut buffer) => {
-                    match res {
-                        Ok(_) => tokio::time::sleep(Duration::from_millis(250)).await,
-                        Err(e) => warn!("Error from maintenance task. Error: {e}"),
-                    }
-                },
-                _ = token.cancelled() => {
-                    debug!("Cancellation caught. exiting.");
-
-                    return Ok(());
-                }
-            }
-        }
+    pub fn rx_subsystem(self: &Arc<Self>) -> RxSubsystem {
+        RxSubsystem::new(self.clone())
     }
 
-    #[instrument(name = "tunnel_maintenance", skip_all)]
-    async fn maintenance_entry(&self, mut buf: &mut [u8]) -> Result<()> {
-        let tunn_result = self.tunn.lock().await.update_timers(&mut buf);
-
-        self.process_tunnel_result(tunn_result).await?;
-
-        Ok(())
-    }
-
-    pub async fn rx_task(&self, token: CancellationToken) -> Result<()> {
-        let mut rx_buf = [0u8; MAX_BUF_SIZE];
-
-        loop {
-            rx_buf.fill(0);
-
-            tokio::select! {
-                res = self.rx_entry(&mut rx_buf) => {
-                    if let Err(e) = res {
-                        warn!("Error from maintenance task. Error: {e}");
-                    }
-                },
-                _ = token.cancelled() => {
-                    debug!("Cancellation caught. exiting.");
-
-                    return Ok(());
-                }
-            }
-        }
-    }
-
-    async fn rx_entry(&self, rx_buf: &mut [u8]) -> Result<()> {
-        let total_rx_bytes = self.udp_socket.recv(rx_buf).await?;
-
-        let received = &rx_buf[0..total_rx_bytes];
-
-        trace!("Received {total_rx_bytes}-byte packet. Packet: {received:?}");
-
-        Ok(())
-    }
-
-    /// Processes a `TunnResult` returned by `tunn`.
-    /// * Sends pending packets to the Wireguard endpoint.
-    /// * Sends handshake packets on initial connection or expired connections.
-    ///     * Does so recursively.
-    async fn process_tunnel_result<'a>(&'a self, res: TunnResult<'a>) -> Result<()> {
-        match res {
-            TunnResult::Done => {}
-            TunnResult::WriteToNetwork(pkt) => {
-                debug!("Writing {}-byte to network. Packet: {pkt:?}", pkt.len());
-
-                self.send_to_endpoint(pkt).await?;
-            }
-            TunnResult::WriteToTunnelV4(pkt, addr) => {
-                debug!("Sending pkt to '{addr}' (TO BE IMPLEMENTED). Packet: {pkt:?}")
-            }
-            TunnResult::WriteToTunnelV6(pkt, addr) => {
-                debug!("Sending pkt to '{addr}' (TO BE IMPLEMENTED). Packet: {pkt:?}")
-            }
-            // If the connection expired, re-run the handshake procedure.
-            TunnResult::Err(WireGuardError::ConnectionExpired) => {
-                debug!("New connection needed. Sending handshake.");
-                let mut buf = vec![0u8; MAX_BUF_SIZE];
-                let handshake_res = self
-                    .tunn
-                    .lock()
-                    .await
-                    .format_handshake_initiation(&mut buf[..], false);
-
-                // The boxed pin allows for the async recursion.
-                Box::pin(async move { self.process_tunnel_result(handshake_res).await }).await?;
-            }
-            TunnResult::Err(e) => warn!("Error received from tunnel. Error: {e:?}"),
-        }
-
-        Ok(())
-    }
-
-    /// Send all bytes in the given slice to the Wireguard endpoint.
-    /// If not all the packet was sent, the a sub-slice is taken over the remaining bytes
-    /// and that slice is sent, repeating as needed until the full original slice was sent.
-    async fn send_to_endpoint(&self, pkt: &[u8]) -> Result<()> {
-        let mut pending_bytes = pkt;
-
-        loop {
-            let sent_bytes = self.udp_socket.send(pending_bytes).await?;
-
-            trace!("Sent {sent_bytes} bytes.");
-
-            if sent_bytes == pending_bytes.len() {
-                trace!("Packet sent successfully.");
-                return Ok(());
-            } else {
-                pending_bytes = &pending_bytes[sent_bytes..];
-            }
-        }
+    pub fn maintenance_subsystem(self: &Arc<Self>) -> MaintenanceSubsystem {
+        MaintenanceSubsystem::new(self.clone())
     }
 }
 
@@ -225,4 +110,54 @@ fn try_get_preshared_key(preshared_key: &PresharedKey) -> Result<[u8; 32]> {
     let arr_ref = preshared_key.0.as_array::<32>().unwrap();
 
     Ok(*arr_ref)
+}
+
+/// A UDP socket pointing to a Wireguard endpoint.
+pub struct UdpEndpoint {
+    socket: UdpSocket,
+}
+
+impl UdpEndpoint {
+    /// Connect to the target Wireguard socket.
+    pub async fn new(socket_addr: SocketAddr) -> Result<Self> {
+        let socket = UdpSocket::bind("0.0.0.0:0").await?;
+        socket.connect(&socket_addr).await?;
+
+        Ok(Self { socket })
+    }
+
+    /// Receive a packet, saving it to the provided byte buffer, and return a slice over the exact-sized packet.
+    pub async fn recv<'a>(&'a self, buf: &'a mut [u8]) -> Result<&'a mut [u8]> {
+        let total_rx_bytes = self.socket.recv(buf).await?;
+
+        let received = &mut buf[0..total_rx_bytes];
+
+        Ok(received)
+    }
+
+    /// Send all bytes in the given slice to the Wireguard endpoint.
+    /// If not all the packet was sent, then a sub-slice is made over the remaining bytes
+    /// and that slice is sent, repeating this process until the full original slice is sent.
+    async fn send_full_slice(&self, packet: &[u8]) -> Result<()> {
+        let mut pending_bytes = packet;
+
+        loop {
+            let bytes_count = pending_bytes.len();
+            let sent_bytes_count = self.socket.send(pending_bytes).await?;
+
+            trace!("Sent {sent_bytes_count} bytes.");
+
+            if sent_bytes_count == bytes_count {
+                trace!("Packet sent successfully.");
+                return Ok(());
+            } else if sent_bytes_count < bytes_count {
+                pending_bytes = &pending_bytes[sent_bytes_count..];
+            } else {
+                warn!(
+                    "Unexpected byte-count greater than original slice length. Sent bytes: {}, payload byte count: {}",
+                    sent_bytes_count, bytes_count
+                );
+            }
+        }
+    }
 }
