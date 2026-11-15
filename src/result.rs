@@ -5,7 +5,10 @@ use std::{
 };
 
 use boringtun::noise::errors::WireGuardError;
-use tokio::task::JoinError;
+use tokio::{
+    sync::broadcast::error::{RecvError, SendError},
+    task::JoinError,
+};
 use tracing::subscriber::SetGlobalDefaultError;
 
 /// Root, program-wide error struct.
@@ -61,7 +64,12 @@ pub enum ErrorKind {
     /// General PS5 library error.
     Ps5(ps5::Error),
     TaskJoining(Box<JoinError>),
+    /// Wireguard-derived error.
     TunnelError(WireGuardError),
+    /// Event bus is closed.
+    BusClosed,
+    /// Event bus receiver lagged behind.
+    BusLagged(u64),
 }
 
 impl Display for ErrorKind {
@@ -78,6 +86,8 @@ impl Display for ErrorKind {
             TomlDeserialization(_) => write!(f, "TOML deserialization error"),
             TaskJoining(e) => write!(f, "Task operation failed. Error: {e}"),
             TunnelError(e) => write!(f, "Wireguard error ({e:?})"),
+            BusClosed => write!(f, "Event bus is closed"),
+            BusLagged(n) => write!(f, "Event bus receiver lagged by {n} messages"),
         }
     }
 }
@@ -91,7 +101,7 @@ impl std::error::Error for Error {
             TomlDeserialization(e) => Some(e),
             TaskJoining(e) => Some(e),
             TunnelError(_) | Ps5(_) | GlobalLogging | PendingConfig | ConfigLoadError(_)
-            | BadKey(_) => None,
+            | BadKey(_) | BusClosed | BusLagged(_) => None,
         }
     }
 }
@@ -129,6 +139,21 @@ impl From<JoinError> for ErrorKind {
 impl From<WireGuardError> for ErrorKind {
     fn from(value: WireGuardError) -> Self {
         Self::TunnelError(value)
+    }
+}
+
+impl From<RecvError> for ErrorKind {
+    fn from(value: RecvError) -> Self {
+        match value {
+            RecvError::Closed => Self::BusClosed,
+            RecvError::Lagged(n) => Self::BusLagged(n),
+        }
+    }
+}
+
+impl<T> From<SendError<T>> for ErrorKind {
+    fn from(_: SendError<T>) -> Self {
+        Self::BusClosed
     }
 }
 

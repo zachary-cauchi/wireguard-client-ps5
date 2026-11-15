@@ -1,6 +1,8 @@
+pub mod bus;
 pub mod config;
 pub mod logging;
 pub mod result;
+pub mod tcp_client_subsystem;
 pub mod tunnel;
 
 use std::{sync::Arc, time::Duration};
@@ -12,7 +14,10 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info, level_filters::LevelFilter};
 
 pub use crate::result::{ErrorKind, Result};
-use crate::{config::get_config, logging::Ps5LoggingBuilder, result::WrapWithMsg, tunnel::Tunnel};
+use crate::{
+    bus::EventBus, config::get_config, logging::Ps5LoggingBuilder, result::WrapWithMsg,
+    tcp_client_subsystem::TcpClientsSubsystem, tunnel::Tunnel,
+};
 
 #[tokio::main]
 async fn main() {
@@ -49,12 +54,14 @@ async fn main_loop() -> Result<()> {
         .await
         .context("Initialising Wireguard tunnel")?;
     let tunnel = Arc::new(tunnel);
+    let bus = EventBus::new();
+    let tcp_client_subsystem = TcpClientsSubsystem::new(bus, "0.0.0.0:60000").await?;
 
     info!("Tunnel initialised.");
 
     let token = CancellationToken::new();
 
-    let mut tasks = spawn_tasks(&tunnel, token.clone()).await?;
+    let mut tasks = spawn_tasks(&tunnel, tcp_client_subsystem, token.clone()).await?;
 
     info!("Tasks started.");
 
@@ -79,6 +86,7 @@ async fn main_loop() -> Result<()> {
 /// Spawn all main tasks.
 async fn spawn_tasks(
     tunnel: &Arc<Tunnel>,
+    tcp_client_subsystem: TcpClientsSubsystem,
     token: CancellationToken,
 ) -> Result<JoinSet<Result<()>>> {
     let mut tasks = JoinSet::new();
@@ -98,6 +106,11 @@ async fn spawn_tasks(
     {
         let token = token.clone();
         tasks.spawn(async move { cancellation_task(token).await });
+    }
+
+    {
+        let token = token.clone();
+        tasks.spawn(async move { tcp_client_subsystem.run_loop(token).await });
     }
 
     Ok(tasks)

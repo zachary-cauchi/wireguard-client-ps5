@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use boringtun::noise::TunnResult;
 use boringtun::noise::errors::WireGuardError;
+use tokio::time::interval;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, instrument, warn};
 
@@ -28,13 +29,15 @@ impl MaintenanceSubsystem {
 
         info!("MAINTENANCE - Started.");
 
+        let mut interval = interval(Duration::from_millis(250));
+
         loop {
             buffer.fill(0);
 
             tokio::select! {
                 res = self.maintenance_entry(&mut buffer) => {
                     match res {
-                        Ok(_) => tokio::time::sleep(Duration::from_millis(250)).await,
+                        Ok(_) => { let _ = interval.tick().await; }
                         Err(e) => warn!("Error from maintenance task. Error: {e}"),
                     }
                 },
@@ -66,7 +69,10 @@ impl MaintenanceSubsystem {
         match res {
             TunnResult::Done => {}
             TunnResult::WriteToNetwork(pkt) => {
-                debug!("Writing {}-byte to network. Packet: {pkt:?}", pkt.len());
+                debug!(
+                    "Writing {}-byte packet to network. Packet: {pkt:?}",
+                    pkt.len()
+                );
 
                 self.tunnel.endpoint.send_full_slice(pkt).await?;
             }

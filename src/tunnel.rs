@@ -1,5 +1,6 @@
 pub mod maintenance_subsystem;
 pub mod rx_subsystem;
+pub mod tx_subsystem;
 
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::Arc;
@@ -13,13 +14,13 @@ use crate::config::{Config, PresharedKey, PrivateKey, PublicKey};
 use crate::result::{Error, WrapWithMsg};
 use crate::tunnel::maintenance_subsystem::MaintenanceSubsystem;
 use crate::tunnel::rx_subsystem::RxSubsystem;
+use crate::tunnel::tx_subsystem::TxSubsystem;
 use crate::{ErrorKind, Result};
 
 const MAX_BUF_SIZE: usize = 1024 * 64;
 
 /// Represents a single-peer WireGuard tunnel connection.
-/// Contains all the necessary logic to transmit and receive from the tunnel,
-/// and maintain an active tunnel.
+/// Delegates tunnel management to its subsystems.
 pub struct Tunnel {
     config: Arc<Config>,
 
@@ -69,12 +70,16 @@ impl Tunnel {
         })
     }
 
+    pub fn maintenance_subsystem(self: &Arc<Self>) -> MaintenanceSubsystem {
+        MaintenanceSubsystem::new(self.clone())
+    }
+
     pub fn rx_subsystem(self: &Arc<Self>) -> RxSubsystem {
         RxSubsystem::new(self.clone())
     }
 
-    pub fn maintenance_subsystem(self: &Arc<Self>) -> MaintenanceSubsystem {
-        MaintenanceSubsystem::new(self.clone())
+    pub fn tx_subsystem(self: &Arc<Self>) -> TxSubsystem {
+        TxSubsystem::new(self.clone())
     }
 }
 
