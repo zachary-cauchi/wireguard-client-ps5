@@ -4,6 +4,7 @@ pub mod logging;
 pub mod result;
 pub mod tcp_client_subsystem;
 pub mod tunnel;
+pub mod virtual_net_stack;
 
 use std::{sync::Arc, time::Duration};
 
@@ -55,7 +56,6 @@ async fn main_loop() -> Result<()> {
         .await
         .context("Initialising Wireguard tunnel")?;
     let tunnel = Arc::new(tunnel);
-    let bus = EventBus::new();
     let tcp_client_subsystem = TcpClientsSubsystem::new(bus, "0.0.0.0:60000").await?;
 
     info!("Tunnel initialised.");
