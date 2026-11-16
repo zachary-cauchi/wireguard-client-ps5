@@ -1,3 +1,8 @@
+use std::{
+    net::{IpAddr, SocketAddr},
+    sync::Arc,
+};
+
 use tokio::sync::broadcast::{self, Receiver, Sender};
 
 use crate::Result;
@@ -26,7 +31,12 @@ impl EventBus {
 }
 
 #[derive(Debug, Clone)]
+pub struct RawPacket(pub Arc<[u8]>);
+
+#[derive(Debug, Clone)]
 pub enum Event {
-    SendRawPacket(Vec<u8>),
-    ReceivedPacket(Vec<u8>),
+    ClientPacket((SocketAddr, RawPacket)),
+    OutboundPacket(RawPacket),
+    PacketFromWG((IpAddr, RawPacket)),
+    PacketToWG((SocketAddr, RawPacket)),
 }

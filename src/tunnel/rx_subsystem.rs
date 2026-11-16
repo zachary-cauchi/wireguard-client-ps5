@@ -6,17 +6,19 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, instrument, trace, warn};
 
 use crate::Result;
+use crate::bus::{Event, EventBus, RawPacket};
 use crate::result::Error;
 use crate::tunnel::{MAX_BUF_SIZE, Tunnel};
 
 /// Subsystem for handling incoming packets from a Wireguard tunnel.
 pub struct RxSubsystem {
     tunnel: Arc<Tunnel>,
+    bus: EventBus,
 }
 
 impl RxSubsystem {
-    pub(super) fn new(tunnel: Arc<Tunnel>) -> Self {
-        Self { tunnel }
+    pub(super) fn new(tunnel: Arc<Tunnel>, bus: EventBus) -> Self {
+        Self { tunnel, bus }
     }
 
     #[instrument(name = "rx", skip_all)]
@@ -101,8 +103,11 @@ impl RxSubsystem {
     }
 
     #[instrument(skip_all, fields(target = %addr))]
-    async fn send_packet(&self, _: &mut [u8], addr: IpAddr) -> Result<()> {
+    async fn send_packet(&self, pkt: &mut [u8], addr: IpAddr) -> Result<()> {
         debug!("Forwarding received packet.");
-        Ok(())
+
+        let raw_packet = RawPacket(pkt.into());
+
+        self.bus.send(Event::PacketFromWG((addr, raw_packet)))
     }
 }

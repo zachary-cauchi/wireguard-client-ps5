@@ -7,7 +7,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, instrument, warn};
 
 use crate::Result;
-use crate::bus::{Event, EventBus};
+use crate::bus::{Event, EventBus, RawPacket};
 
 /// Handles spawning of TCP streams from incoming connections and outbound events.
 pub struct TcpClientsSubsystem {
@@ -101,7 +101,7 @@ impl TcpPeerHandler {
                             break;
                         },
                         Err(RecvError::Lagged(n)) => {
-                            warn!("Bus receiver lagged behind by {n} events.");
+                            error!("Bus receiver lagged behind by {n} events. Packets likely dropped.");
                             continue;
                         }
                     };
@@ -115,9 +115,10 @@ impl TcpPeerHandler {
 
     async fn process_packet(&self, packet: &[u8]) -> Result<()> {
         debug!("Received {}-byte packet: {:?}", packet.len(), packet);
-        // TODO: Send inbound packet to event bus.
 
-        Ok(())
+        let raw_packet = RawPacket(packet.into());
+
+        self.bus.send(Event::ClientPacket((self.peer, raw_packet)))
     }
 
     async fn process_event(&self, event: Event) -> Result<()> {

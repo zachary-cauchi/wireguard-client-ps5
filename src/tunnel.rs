@@ -10,6 +10,7 @@ use tokio::net::UdpSocket;
 use tokio::sync::Mutex;
 use tracing::{debug, instrument, trace, warn};
 
+use crate::bus::EventBus;
 use crate::config::{Config, PresharedKey, PrivateKey, PublicKey};
 use crate::result::{Error, WrapWithMsg};
 use crate::tunnel::maintenance_subsystem::MaintenanceSubsystem;
@@ -29,12 +30,14 @@ pub struct Tunnel {
 
     /// Socket used to communicate to the peer.
     endpoint: UdpEndpoint,
+
+    bus: EventBus,
 }
 
 impl Tunnel {
     /// Initialize the WG tunnel.
     #[instrument(name = "tunnel_init", skip_all)]
-    pub async fn init(config: Arc<Config>) -> Result<Self> {
+    pub async fn init(config: Arc<Config>, bus: EventBus) -> Result<Self> {
         const KEEPALIVE: u16 = 30;
         debug!("Initialising tunnel.");
 
@@ -67,6 +70,7 @@ impl Tunnel {
             config,
             tunn: Mutex::new(tunn),
             endpoint,
+            bus,
         })
     }
 
@@ -75,11 +79,11 @@ impl Tunnel {
     }
 
     pub fn rx_subsystem(self: &Arc<Self>) -> RxSubsystem {
-        RxSubsystem::new(self.clone())
+        RxSubsystem::new(self.clone(), self.bus.clone())
     }
 
     pub fn tx_subsystem(self: &Arc<Self>) -> TxSubsystem {
-        TxSubsystem::new(self.clone())
+        TxSubsystem::new(self.clone(), self.bus.clone())
     }
 }
 

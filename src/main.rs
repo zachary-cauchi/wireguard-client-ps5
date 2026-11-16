@@ -50,7 +50,8 @@ async fn main_loop() -> Result<()> {
 
     info!("Config file loaded.");
 
-    let tunnel = Tunnel::init(config.clone())
+    let bus = EventBus::new();
+    let tunnel = Tunnel::init(config.clone(), bus.clone())
         .await
         .context("Initialising Wireguard tunnel")?;
     let tunnel = Arc::new(tunnel);
