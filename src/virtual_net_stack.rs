@@ -3,19 +3,12 @@ use std::sync::{Arc, Mutex};
 
 use bytes::{Bytes, BytesMut};
 use smoltcp::phy::{DeviceCapabilities, Medium};
-use tokio::sync::broadcast::error::RecvError;
-use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info, instrument, warn};
+use tracing::warn;
 
-use crate::Result;
 use crate::bus::{Event, EventBus, RawPacket};
+use crate::config::Protocol;
 
-pub enum Protocol {
-    Udp,
-    Tcp,
-}
-
-/// Defines a Virtual network device which routes IP packets
+/// Defines a Virtual network device which routes IP packets.
 pub struct VirtualNetStack {
     /// Support protocol of the stack.
     protocol: Protocol,
@@ -37,52 +30,6 @@ impl VirtualNetStack {
             bus,
             packet_queue,
         }
-    }
-
-    #[instrument(name = "virtual_net", skip_all)]
-    pub async fn run_loop(self, token: CancellationToken) {
-        info!("VIRTUAL_NET - Started");
-
-        let mut bus_recv = self.bus.subscribe();
-
-        loop {
-            tokio::select! {
-                res = bus_recv.recv() => {
-                    let event = match res {
-                        Ok(e) => e,
-                        Err(RecvError::Closed) => {
-                            error!("Event bus is closed. Closing stream.");
-                            break;
-                        },
-                        Err(RecvError::Lagged(n)) => {
-                            error!("Bus receiver lagged behind by {n} events. Packets likely dropped.");
-                            continue;
-                        }
-                    };
-                    if let Err(e) = self.process_event(event).await {
-                        warn!("Error encountered when processing event. Error: {e}")
-                    }
-                }
-                _ = token.cancelled() => {
-                    debug!("Cancellation caught. exiting.");
-
-                    break;
-                }
-            }
-        }
-
-        info!("VIRTUAL_NET - Stopped");
-    }
-
-    async fn process_event(&self, event: Event) -> Result<()> {
-        let Event::ClientPacket((addr, packet)) = event else {
-            debug!("Packet filtered.");
-            return Ok(());
-        };
-
-        debug!("Processing {}-byte packet from {addr}", packet.0.len());
-
-        Ok(())
     }
 }
 

@@ -1,7 +1,8 @@
 use std::{
+    fmt::Display,
     fs::File,
     io::Write,
-    net::IpAddr,
+    net::{IpAddr, SocketAddr, ToSocketAddrs},
     path::{Path, PathBuf},
     str::FromStr,
 };
@@ -14,6 +15,84 @@ use crate::{
     ErrorKind, Result,
     result::{Error, WrapWithMsg},
 };
+
+/// Defines a port forwarding rule from the given source socket
+/// to the destination socket, using the specified transport protocol.
+#[derive(Debug, Clone)]
+pub struct PortForwardRule {
+    pub source_addr: SocketAddr,
+    pub dest_addr: SocketAddr,
+    pub protocol: Protocol,
+}
+
+impl Display for PortForwardRule {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}:{}:{}",
+            self.source_addr, self.dest_addr, self.protocol
+        )
+    }
+}
+
+impl PortForwardRule {
+    pub fn try_new(
+        source_addr: impl ToSocketAddrs,
+        dest_addr: impl ToSocketAddrs,
+        protocol: Protocol,
+    ) -> Result<Self> {
+        let source_addr =
+            source_addr
+                .to_socket_addrs()?
+                .next()
+                .ok_or(Error::new(ErrorKind::BadValue(
+                    "No source address returned",
+                )))?;
+
+        let dest_addr =
+            dest_addr
+                .to_socket_addrs()?
+                .next()
+                .ok_or(Error::new(ErrorKind::BadValue(
+                    "No destination address returned",
+                )))?;
+
+        Ok(Self {
+            source_addr,
+            dest_addr,
+            protocol,
+        })
+    }
+}
+
+/// Packet/transport protocol type.
+/// TODO Find better place for this.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Protocol {
+    Udp,
+    Tcp,
+}
+
+impl Display for Protocol {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let msg = match self {
+            Self::Tcp => "TCP",
+            Self::Udp => "UDP",
+        };
+
+        f.write_str(msg)
+    }
+}
+
+/// TODO Find better place for this.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct VirtualPort(pub Protocol, pub u16);
+
+impl Display for VirtualPort {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:{}", self.0, self.1)
+    }
+}
 
 pub const ROOT_DIR_STR: &str = "/data/wireguard-client";
 pub const CFG_FILENAME: &str = "wg0.toml";

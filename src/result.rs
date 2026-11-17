@@ -5,6 +5,7 @@ use std::{
 };
 
 use boringtun::noise::errors::WireGuardError;
+use smoltcp::socket::tcp::ConnectError;
 use tokio::{
     sync::broadcast::error::{RecvError, SendError},
     task::JoinError,
@@ -19,7 +20,8 @@ pub struct Error {
 }
 
 impl Error {
-    pub fn new(kind: ErrorKind) -> Self {
+    #[inline]
+    pub const fn new(kind: ErrorKind) -> Self {
         Self {
             msg: Cow::Borrowed(""),
             kind,
@@ -70,6 +72,9 @@ pub enum ErrorKind {
     BusClosed,
     /// Event bus receiver lagged behind.
     BusLagged(u64),
+    PortPoolExhausted,
+    BadValue(&'static str),
+    TcpStackConnectError(ConnectError),
 }
 
 impl Display for ErrorKind {
@@ -88,6 +93,9 @@ impl Display for ErrorKind {
             TunnelError(e) => write!(f, "Wireguard error ({e:?})"),
             BusClosed => write!(f, "Event bus is closed"),
             BusLagged(n) => write!(f, "Event bus receiver lagged by {n} messages"),
+            PortPoolExhausted => write!(f, "Port pool exhausted"),
+            BadValue(msg) => write!(f, "Bad value received ({msg})"),
+            TcpStackConnectError(e) => write!(f, "TCP virtual stack connection error ({e})"),
         }
     }
 }
@@ -100,8 +108,7 @@ impl std::error::Error for Error {
             FileIO(e) => Some(e),
             TomlDeserialization(e) => Some(e),
             TaskJoining(e) => Some(e),
-            TunnelError(_) | Ps5(_) | GlobalLogging | PendingConfig | ConfigLoadError(_)
-            | BadKey(_) | BusClosed | BusLagged(_) => None,
+            _ => None,
         }
     }
 }
@@ -154,6 +161,12 @@ impl From<RecvError> for ErrorKind {
 impl<T> From<SendError<T>> for ErrorKind {
     fn from(_: SendError<T>) -> Self {
         Self::BusClosed
+    }
+}
+
+impl From<ConnectError> for ErrorKind {
+    fn from(value: ConnectError) -> Self {
+        Self::TcpStackConnectError(value)
     }
 }
 

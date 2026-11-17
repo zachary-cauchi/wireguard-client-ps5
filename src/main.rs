@@ -4,6 +4,7 @@ pub mod logging;
 pub mod result;
 pub mod tcp_client_subsystem;
 pub mod tunnel;
+pub mod virtual_interface;
 pub mod virtual_net_stack;
 
 use std::{sync::Arc, time::Duration};
@@ -16,8 +17,12 @@ use tracing::{error, info, level_filters::LevelFilter};
 
 pub use crate::result::{ErrorKind, Result};
 use crate::{
-    bus::EventBus, config::get_config, logging::Ps5LoggingBuilder, result::WrapWithMsg,
-    tcp_client_subsystem::TcpClientsSubsystem, tunnel::Tunnel,
+    bus::EventBus,
+    config::{PortForwardRule, Protocol, get_config},
+    logging::Ps5LoggingBuilder,
+    result::WrapWithMsg,
+    tcp_client_subsystem::TcpClientsSubsystem,
+    tunnel::Tunnel,
 };
 
 #[tokio::main]
@@ -50,6 +55,8 @@ async fn main_loop() -> Result<()> {
     let config = Arc::new(get_config().context("Getting app config")?);
 
     info!("Config file loaded.");
+
+    let sample_rule = PortForwardRule::try_new("0.0.0.0:60000", "1.1.1.1:80", Protocol::Tcp)?;
 
     let bus = EventBus::new();
     let tunnel = Tunnel::init(config.clone(), bus.clone())
