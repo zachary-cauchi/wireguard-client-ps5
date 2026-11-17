@@ -9,6 +9,7 @@ use smoltcp::iface::Interface;
 use smoltcp::iface::SocketHandle;
 use smoltcp::iface::SocketSet;
 use smoltcp::socket::tcp;
+use smoltcp::socket::tcp::SocketBuffer;
 use smoltcp::time::Instant;
 use smoltcp::wire::HardwareAddress;
 use smoltcp::wire::IpAddress;
@@ -111,13 +112,39 @@ impl TcpVirtualInterface {
     }
 
     async fn recv_event(&mut self, receiver: &mut Receiver<Event>) -> Result<()> {
+        use Event::*;
         match receiver.recv().await? {
-            Event::ClientConnected(port_forward, virtual_port) => {
+            ClientConnected(port_forward, virtual_port) => {
                 self.process_connected_client(port_forward, virtual_port)
                     .await
             }
+            LocalOutboundPacket(virtual_port, packet)
+                if self.virtual_port_handle_map.contains_key(&virtual_port) =>
+            {
+                self.process_local_outbound_packet(virtual_port, packet)
+                    .await
+            }
+            ClientDisconnected(virtual_port) => {
+                self.process_disconnected_client(virtual_port).await
+            }
             _ => Ok(()),
         }
+    }
+
+    async fn process_local_outbound_packet(
+        &mut self,
+        virtual_port: VirtualPort,
+        packet: Bytes,
+    ) -> Result<()> {
+        let Some(queue) = self.packet_queues.get_mut(&virtual_port) else {
+            warn!("Failed to process local outbound packet. No packet queue for '{virtual_port}'.");
+
+            return Ok(());
+        };
+
+        queue.push_back(packet);
+
+        Ok(())
     }
 
     /// Process a newly-connected client socke and assigned virtual port.
@@ -153,12 +180,28 @@ impl TcpVirtualInterface {
         Ok(())
     }
 
+    /// Find a client socket by the given socket and disconnect it from the virtual interface.
+    #[instrument(skip(self))]
+    async fn process_disconnected_client(&mut self, virtual_port: VirtualPort) -> Result<()> {
+        let Some(handle) = self.virtual_port_handle_map.remove(&virtual_port) else {
+            trace!("No client found for given virtual port.");
+            return Ok(());
+        };
+
+        trace!("Closing socket with handle {handle}.");
+
+        let client_socket = self.sockets.get_mut::<tcp::Socket<'_>>(handle);
+        client_socket.close();
+
+        Ok(())
+    }
+
     fn create_client_socket() -> tcp::Socket<'static> {
         let tx_bytes = vec![0; MAX_PACKET_BYTES];
         let rx_bytes = vec![0; MAX_PACKET_BYTES];
 
-        let tx_buffer = tcp::SocketBuffer::new(tx_bytes);
-        let rx_buffer = tcp::SocketBuffer::new(rx_bytes);
+        let tx_buffer = SocketBuffer::new(tx_bytes);
+        let rx_buffer = SocketBuffer::new(rx_bytes);
 
         tcp::Socket::new(rx_buffer, tx_buffer)
     }
@@ -188,8 +231,9 @@ fn get_addresses(
 
 /// convert an address to a CIDR with only one address in the subnet.
 const fn addr_to_cidr(ip: IpAddress) -> IpCidr {
+    use IpAddress::*;
     match ip {
-        IpAddress::Ipv4(addr) => IpCidr::Ipv4(Ipv4Cidr::new(addr, 32)),
-        IpAddress::Ipv6(addr) => IpCidr::Ipv6(Ipv6Cidr::new(addr, 128)),
+        Ipv4(addr) => IpCidr::Ipv4(Ipv4Cidr::new(addr, 32)),
+        Ipv6(addr) => IpCidr::Ipv6(Ipv6Cidr::new(addr, 128)),
     }
 }
