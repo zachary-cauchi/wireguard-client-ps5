@@ -3,14 +3,15 @@ use std::net::SocketAddr;
 use std::ops::Range;
 use std::sync::Arc;
 
-use tokio::io::AsyncReadExt;
+use bytes::Bytes;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
 use tokio::sync::RwLock;
 use tokio::sync::broadcast::error::RecvError;
 use tokio_util::sync::CancellationToken;
 use tracing::{Level, debug, error, info, instrument, warn};
 
-use crate::bus::{Event, EventBus, RawPacket};
+use crate::bus::{Event, EventBus};
 use crate::config::{Protocol, VirtualPort};
 use crate::result::{Error, WrapWithMsg};
 use crate::{ErrorKind, Result};
@@ -91,6 +92,7 @@ impl TcpClientsSubsystem {
             bus: self.bus.clone(),
             port_pool: self.virtual_port_pool.clone(),
             virtual_port: assigned_virtual_port,
+            is_closed: false,
         };
 
         tokio::spawn(token.run_until_cancelled_owned(handler.run_loop()));
@@ -99,12 +101,14 @@ impl TcpClientsSubsystem {
     }
 }
 
-pub struct TcpClientHandler {
+/// Wraps and manages a client TCP stream, routing packets to/from the client.
+struct TcpClientHandler {
     stream: TcpStream,
     peer: SocketAddr,
     bus: EventBus,
     port_pool: PortPool,
     virtual_port: VirtualPort,
+    is_closed: bool,
 }
 
 impl TcpClientHandler {
@@ -117,6 +121,11 @@ impl TcpClientHandler {
         let mut bus_recv = self.bus.subscribe();
 
         loop {
+            if self.is_closed {
+                debug!("Stream is closed.");
+                break;
+            }
+
             tokio::select! {
                 res = self.stream.read(&mut rx_buf) => {
                     let packet = match res {
@@ -165,19 +174,38 @@ impl TcpClientHandler {
     async fn process_packet(&self, packet: &[u8]) -> Result<()> {
         debug!("Received {}-byte packet: {:?}", packet.len(), packet);
 
-        let raw_packet = RawPacket(packet.into());
+        let raw_packet = Bytes::copy_from_slice(packet);
 
-        self.bus.send(Event::ClientPacket((self.peer, raw_packet)))
+        self.bus
+            .send(Event::LocalOutboundPacket(self.virtual_port, raw_packet))
     }
 
-    async fn process_event(&self, event: Event) -> Result<()> {
+    async fn process_event(&mut self, event: Event) -> Result<()> {
         debug!("Received event. Event: {event:?}");
-        // TODO: Check if event is relevant to this peer and handle accordingly.
+        match event {
+            Event::ClientDisconnected(vp) if vp == self.virtual_port => {
+                self.is_closed = true;
+                self.stream.shutdown().await?;
+            }
+            Event::LocalInboundPacket(vp, packet) if vp == self.virtual_port => {
+                self.stream
+                    .writable()
+                    .await
+                    .context("Waiting to write packet to peer stream")?;
+
+                self.stream
+                    .write_all(&packet)
+                    .await
+                    .context("Writing the packet to the peer stream")?;
+            }
+            _ => {}
+        }
 
         Ok(())
     }
 }
 
+/// Represents a pool of available ports for assignment.
 #[derive(Clone)]
 pub struct PortPool {
     inner: Arc<RwLock<PortPoolInner>>,

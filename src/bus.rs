@@ -46,7 +46,7 @@ pub enum Event {
     ClientDisconnected(VirtualPort),
     /// A packet from a local client was received and needs to be routed through the virtual stack.
     LocalOutboundPacket(VirtualPort, Bytes),
-    /// A packet from the virtual stack was received and needs to be transmitted to its respective local client.
+    /// A packet from the virtual stack was received and needs to be routed to its respective local client.
     LocalInboundPacket(VirtualPort, Bytes),
     ClientPacket((SocketAddr, RawPacket)),
     OutboundPacket(RawPacket),
