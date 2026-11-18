@@ -6,11 +6,13 @@ use std::net::IpAddr;
 use bytes::Bytes;
 use smoltcp::iface::Config;
 use smoltcp::iface::Interface;
+use smoltcp::iface::PollResult;
 use smoltcp::iface::SocketHandle;
 use smoltcp::iface::SocketSet;
 use smoltcp::socket::tcp;
 use smoltcp::socket::tcp::SocketBuffer;
-use smoltcp::time::Instant;
+use smoltcp::socket::tcp::State;
+use smoltcp::time::{Duration, Instant};
 use smoltcp::wire::HardwareAddress;
 use smoltcp::wire::IpAddress;
 use smoltcp::wire::IpCidr;
@@ -18,6 +20,7 @@ use smoltcp::wire::Ipv4Cidr;
 use smoltcp::wire::Ipv6Cidr;
 use tokio::sync::broadcast::Receiver;
 use tokio_util::sync::CancellationToken;
+use tracing::error;
 use tracing::trace;
 use tracing::{Level, debug, info, instrument, warn};
 
@@ -27,6 +30,7 @@ use crate::bus::EventBus;
 use crate::config::PortForwardRule;
 use crate::config::Protocol;
 use crate::config::VirtualPort;
+use crate::result::WrapWithMsg;
 use crate::virtual_net_stack::VirtualNetStack;
 
 const MAX_PACKET_BYTES: usize = 1024 * 64;
@@ -45,6 +49,7 @@ pub struct TcpVirtualInterface {
     virtual_port_handle_map: HashMap<VirtualPort, SocketHandle>,
     /// Queues of pending packets to their respective ports.
     packet_queues: HashMap<VirtualPort, VecDeque<Bytes>>,
+    poll_sleep: InterfacePollSleep,
 }
 
 impl TcpVirtualInterface {
@@ -63,7 +68,8 @@ impl TcpVirtualInterface {
 
         debug!("Creating interface. Addresses: {addresses:?}");
 
-        let mut interface = Interface::new(config, &mut device, Instant::now());
+        let instant = Instant::now();
+        let mut interface = Interface::new(config, &mut device, instant);
 
         interface.update_ip_addrs(|ip_addresses| {
             addresses.into_iter().for_each(|addr| {
@@ -82,6 +88,7 @@ impl TcpVirtualInterface {
             interface,
             virtual_port_handle_map: HashMap::new(),
             packet_queues: HashMap::new(),
+            poll_sleep: InterfacePollSleep::NeverEnd,
         }
     }
 
@@ -92,7 +99,14 @@ impl TcpVirtualInterface {
         let mut receiver = self.bus.subscribe();
 
         loop {
+            let poll_sleep = self.poll_sleep;
+
             tokio::select! {
+                _ = poll_sleep.sleep() => {
+                    if let Err(e) = self.process_pending_stack_packets().await {
+                        warn!("Failed to process virtual interface packets. Error: {e}");
+                    }
+                },
                 res = self.recv_event(&mut receiver) => {
                     if let Err(e) = res {
                         warn!("Failed to process event. Error: {e}");
@@ -109,6 +123,96 @@ impl TcpVirtualInterface {
         info!("TCP VIRT INTERFACE - Stopped.");
 
         Ok(())
+    }
+
+    /// Process packets to and from the interface.
+    /// The following steps are done in order.
+    /// * Remove any disconnected clients.
+    /// * Perform a poll operation on the interface, filling and draining the rx/tx buffers.
+    /// * For each virtual port and handle, try send and receive packets if the socket can send/receive.
+    /// * Calculate the next advised poll deadline.
+    async fn process_pending_stack_packets(&mut self) -> Result<()> {
+        let processing_start = Instant::now();
+
+        self.remove_disconnected_clients();
+
+        let poll_result =
+            self.interface
+                .poll(processing_start, &mut self.device, &mut self.sockets);
+
+        if poll_result == PollResult::SocketStateChanged {
+            trace!("Poll completed. Processing pending TCP packets.");
+        }
+
+        for (virtual_port, handle) in self.virtual_port_handle_map.iter() {
+            let client_socket = self.sockets.get_mut::<tcp::Socket>(*handle);
+
+            // Process any pending packets if the client socket is available for sending.
+            if client_socket.can_send() {
+                let Some(send_queue) = self.packet_queues.get_mut(&virtual_port) else {
+                    continue;
+                };
+                let Some(packet_to_send) = send_queue.pop_front() else {
+                    continue;
+                };
+
+                // Try send the whole packet. If not all the packet bytes were sent,
+                // the socket buffer is full. In which case, push the packet back on top.
+                let packet_len = packet_to_send.len();
+                match client_socket.send_slice(&packet_to_send) {
+                    Ok(sent_count) if sent_count < packet_len => {
+                        let remainder =
+                            Bytes::copy_from_slice(&packet_to_send[sent_count..packet_len]);
+                        send_queue.push_front(remainder);
+                    }
+                    Ok(send_count) => {
+                        trace!("Sent {send_count} bytes to virtual port {virtual_port}.")
+                    }
+                    Err(e) => {
+                        error!("Failed to send packet to virtual port {virtual_port}. Error: {e}");
+                    }
+                }
+            }
+
+            if client_socket.can_recv() {
+                match client_socket.recv(|b| (b.len(), Bytes::copy_from_slice(b))) {
+                    Ok(data) => {
+                        trace!("Received {} bytes from {virtual_port}.", data.len());
+                        if !data.is_empty() {
+                            self.bus
+                                .send(Event::LocalInboundPacket(*virtual_port, data))
+                                .context("Sending LocalInboundPacket event")?;
+                        }
+                    }
+                    Err(e) => {
+                        error!(
+                            "Failed to receive bytes from virtual port {virtual_port}. Error: {e}"
+                        );
+                    }
+                }
+            }
+        }
+
+        // Once processing is done, calculate the next due sleep interval.
+        let advisory_duration = self.interface.poll_delay(processing_start, &self.sockets);
+        self.poll_sleep = InterfacePollSleep::from_advisory_duration(advisory_duration);
+
+        Ok(())
+    }
+
+    fn remove_disconnected_clients(&mut self) {
+        self.virtual_port_handle_map.retain(|virtual_port, handle| {
+            let client_socket = self.sockets.get_mut::<tcp::Socket>(*handle);
+            if client_socket.state() != State::Closed {
+                return true;
+            }
+
+            let _ = self.bus.send(Event::ClientDisconnected(*virtual_port));
+            let _ = self.packet_queues.remove(virtual_port);
+            self.sockets.remove(*handle);
+
+            true
+        });
     }
 
     async fn recv_event(&mut self, receiver: &mut Receiver<Event>) -> Result<()> {
@@ -204,6 +308,37 @@ impl TcpVirtualInterface {
         let rx_buffer = SocketBuffer::new(rx_bytes);
 
         tcp::Socket::new(rx_buffer, tx_buffer)
+    }
+}
+
+/// Wrapper for sleeping at according to the advised delays from the virtual interface.
+#[derive(Clone, Copy)]
+enum InterfacePollSleep {
+    /// Sleep forever.
+    NeverEnd,
+    /// Don't sleep at all.
+    Immediate,
+    /// Sleep until this deadline.
+    Until(tokio::time::Instant),
+}
+
+impl InterfacePollSleep {
+    /// Create [Self] from the an optional duration
+    /// (the output of `smoltcp::iface::interface::Interface::poll_delay`).
+    pub fn from_advisory_duration(advisory: Option<Duration>) -> Self {
+        match advisory {
+            None => Self::Immediate,
+            Some(Duration::ZERO) => Self::Immediate,
+            Some(duration) => Self::Until(tokio::time::Instant::now() + duration.into()),
+        }
+    }
+
+    pub async fn sleep(&self) {
+        match self {
+            Self::Immediate => {}
+            Self::NeverEnd => tokio::time::sleep(Duration::MAX.into()).await,
+            Self::Until(deadline) => tokio::time::sleep_until(*deadline).await,
+        }
     }
 }
 
