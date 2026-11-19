@@ -24,12 +24,14 @@ use tracing::error;
 use tracing::trace;
 use tracing::{Level, debug, info, instrument, warn};
 
+use crate::ErrorKind;
 use crate::Result;
 use crate::bus::Event;
 use crate::bus::EventBus;
 use crate::config::PortForwardRule;
 use crate::config::Protocol;
 use crate::config::VirtualPort;
+use crate::result::Error;
 use crate::result::WrapWithMsg;
 use crate::virtual_net_stack::VirtualNetStack;
 
@@ -159,11 +161,14 @@ impl TcpVirtualInterface {
                 // Try send the whole packet. If not all the packet bytes were sent,
                 // the socket buffer is full. In which case, push the packet back on top.
                 let packet_len = packet_to_send.len();
+
                 match client_socket.send_slice(&packet_to_send) {
                     Ok(sent_count) if sent_count < packet_len => {
                         let remainder =
                             Bytes::copy_from_slice(&packet_to_send[sent_count..packet_len]);
                         send_queue.push_front(remainder);
+
+                        trace!("Sent {sent_count} bytes of {packet_len}-byte packet.");
                     }
                     Ok(send_count) => {
                         trace!("Sent {send_count} bytes to virtual port {virtual_port}.")
@@ -235,18 +240,22 @@ impl TcpVirtualInterface {
         }
     }
 
+    /// Queue a given outbound packet for routing.
+    #[instrument("outbound_packet", skip(self, packet), err(level = Level::ERROR))]
     async fn process_local_outbound_packet(
         &mut self,
         virtual_port: VirtualPort,
         packet: Bytes,
     ) -> Result<()> {
-        let Some(queue) = self.packet_queues.get_mut(&virtual_port) else {
-            warn!("Failed to process local outbound packet. No packet queue for '{virtual_port}'.");
+        trace!("Received outbound packet. Packet: {packet:?}");
 
-            return Ok(());
-        };
+        let queue = self
+            .packet_queues
+            .get_mut(&virtual_port)
+            .ok_or(Error::new(ErrorKind::BadValue("Missing packet queue")))?;
 
         queue.push_back(packet);
+        self.poll_sleep.set_immediate();
 
         Ok(())
     }
@@ -267,6 +276,7 @@ impl TcpVirtualInterface {
         trace!("Created and inserted socket handle.");
 
         self.virtual_port_handle_map.insert(virtual_port, handle);
+        self.packet_queues.insert(virtual_port, VecDeque::new());
 
         let client_socket = self.sockets.get_mut::<tcp::Socket>(handle);
         let context = self.interface.context();
@@ -281,21 +291,27 @@ impl TcpVirtualInterface {
 
         trace!("Client socket configured.");
 
+        self.poll_sleep.set_immediate();
+
         Ok(())
     }
 
     /// Find a client socket by the given socket and disconnect it from the virtual interface.
-    #[instrument(skip(self))]
+    #[instrument(skip(self), err(level = Level::ERROR))]
     async fn process_disconnected_client(&mut self, virtual_port: VirtualPort) -> Result<()> {
-        let Some(handle) = self.virtual_port_handle_map.remove(&virtual_port) else {
-            trace!("No client found for given virtual port.");
-            return Ok(());
-        };
+        let handle = self
+            .virtual_port_handle_map
+            .remove(&virtual_port)
+            .ok_or(Error::new(ErrorKind::BadKey(
+                "No client found for given virtual port",
+            )))?;
 
         trace!("Closing socket with handle {handle}.");
 
         let client_socket = self.sockets.get_mut::<tcp::Socket<'_>>(handle);
         client_socket.close();
+
+        self.poll_sleep.set_immediate();
 
         Ok(())
     }
@@ -331,6 +347,10 @@ impl InterfacePollSleep {
             Some(Duration::ZERO) => Self::Immediate,
             Some(duration) => Self::Until(tokio::time::Instant::now() + duration.into()),
         }
+    }
+
+    pub fn set_immediate(&mut self) {
+        *self = Self::Immediate;
     }
 
     pub async fn sleep(&self) {

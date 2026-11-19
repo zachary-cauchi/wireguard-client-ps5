@@ -12,26 +12,33 @@ use tokio_util::sync::CancellationToken;
 use tracing::{Level, debug, error, info, instrument, warn};
 
 use crate::bus::{Event, EventBus};
-use crate::config::{Protocol, VirtualPort};
+use crate::config::{PortForwardRule, Protocol, VirtualPort};
 use crate::result::{Error, WrapWithMsg};
 use crate::{ErrorKind, Result};
 
 /// Handles spawning of TCP streams from incoming connections and outbound events.
 /// Assigns a virtual port to the connection and forwards them through the event bus.
 pub struct TcpClientsSubsystem {
+    /// Modify to either manage more than one rule, or spawn tasks for each.
+    port_forward_rule: PortForwardRule,
     socket: TcpListener,
     bus: EventBus,
     virtual_port_pool: PortPool,
 }
 
 impl TcpClientsSubsystem {
-    pub async fn new(bus: EventBus, addr: impl ToSocketAddrs) -> Result<Self> {
+    pub async fn new(
+        bus: EventBus,
+        port_forward_rule: PortForwardRule,
+        addr: impl ToSocketAddrs,
+    ) -> Result<Self> {
         let socket = TcpListener::bind(addr).await?;
         let virtual_port_pool = PortPool::new(Protocol::Tcp);
 
         Ok(Self {
             socket,
             bus,
+            port_forward_rule,
             virtual_port_pool,
         })
     }
@@ -85,6 +92,13 @@ impl TcpClientsSubsystem {
             .context("Selecting virtual TCP port")?;
 
         debug!("Assigning virtual port {assigned_virtual_port}.");
+
+        self.bus
+            .send(Event::ClientConnected(
+                self.port_forward_rule.clone(),
+                assigned_virtual_port,
+            ))
+            .context("Sending ClientConnected notif")?;
 
         let handler = TcpClientHandler {
             stream,

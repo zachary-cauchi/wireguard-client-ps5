@@ -23,6 +23,8 @@ use crate::{
     result::WrapWithMsg,
     tcp_client_subsystem::TcpClientsSubsystem,
     tunnel::Tunnel,
+    virtual_interface::TcpVirtualInterface,
+    virtual_net_stack::VirtualNetStack,
 };
 
 #[tokio::main]
@@ -63,13 +65,28 @@ async fn main_loop() -> Result<()> {
         .await
         .context("Initialising Wireguard tunnel")?;
     let tunnel = Arc::new(tunnel);
-    let tcp_client_subsystem = TcpClientsSubsystem::new(bus, "0.0.0.0:60000").await?;
 
     info!("Tunnel initialised.");
 
+    let tcp_client_subsystem =
+        TcpClientsSubsystem::new(bus.clone(), sample_rule.clone(), "0.0.0.0:60000").await?;
+    let virtual_device = VirtualNetStack::new(Protocol::Tcp, 1500, bus.clone());
+    let virtual_interface = TcpVirtualInterface::new(
+        config.interface.address.ip_addr,
+        &[sample_rule],
+        bus.clone(),
+        virtual_device,
+    );
+
     let token = CancellationToken::new();
 
-    let mut tasks = spawn_tasks(&tunnel, tcp_client_subsystem, token.clone()).await?;
+    let mut tasks = spawn_tasks(
+        &tunnel,
+        tcp_client_subsystem,
+        virtual_interface,
+        token.clone(),
+    )
+    .await?;
 
     info!("Tasks started.");
 
@@ -95,6 +112,7 @@ async fn main_loop() -> Result<()> {
 async fn spawn_tasks(
     tunnel: &Arc<Tunnel>,
     tcp_client_subsystem: TcpClientsSubsystem,
+    virtual_interface: TcpVirtualInterface,
     token: CancellationToken,
 ) -> Result<JoinSet<Result<()>>> {
     let mut tasks = JoinSet::new();
@@ -119,6 +137,11 @@ async fn spawn_tasks(
     {
         let token = token.clone();
         tasks.spawn(async move { tcp_client_subsystem.run_loop(token).await });
+    }
+
+    {
+        let token = token.clone();
+        tasks.spawn(async move { virtual_interface.run_loop(token).await });
     }
 
     Ok(tasks)
