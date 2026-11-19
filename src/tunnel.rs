@@ -2,7 +2,7 @@ pub mod maintenance_subsystem;
 pub mod rx_subsystem;
 pub mod tx_subsystem;
 
-use std::net::{SocketAddr, ToSocketAddrs};
+use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use std::sync::Arc;
 
 use boringtun::{noise::Tunn, x25519::StaticSecret};
@@ -30,6 +30,8 @@ pub struct Tunnel {
 
     /// Socket used to communicate to the peer.
     endpoint: UdpEndpoint,
+
+    local_wg_addr: IpAddr,
 
     bus: EventBus,
 }
@@ -59,6 +61,7 @@ impl Tunnel {
         let socket_addr = get_or_resolve_peer_endpoint_addr(&config)
             .await
             .context("Getting or resolving peer endpoint addr")?;
+        let local_wg_addr = config.interface.address.ip_addr;
 
         debug!("Building UDP socket.");
 
@@ -71,6 +74,7 @@ impl Tunnel {
             tunn: Mutex::new(tunn),
             endpoint,
             bus,
+            local_wg_addr,
         })
     }
 

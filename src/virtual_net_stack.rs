@@ -3,10 +3,13 @@ use std::sync::{Arc, Mutex};
 
 use bytes::{Bytes, BytesMut};
 use smoltcp::phy::{DeviceCapabilities, Medium};
-use tracing::warn;
+use tokio_util::sync::CancellationToken;
+use tracing::{debug, instrument, warn};
 
-use crate::bus::{Event, EventBus, RawPacket};
+use crate::Result;
+use crate::bus::{Event, EventBus};
 use crate::config::Protocol;
+use crate::result::WrapWithMsg;
 
 /// Defines a Virtual network device which routes IP packets.
 pub struct VirtualNetStack {
@@ -29,6 +32,52 @@ impl VirtualNetStack {
             mtu,
             bus,
             packet_queue,
+        }
+    }
+
+    /// Spawns a [VirtualNetStackFeeder] task bound to this device and token.
+    pub async fn spawn_feeder_task(&self, token: CancellationToken) {
+        let feeder = VirtualNetStackFeeder {
+            protocol: self.protocol,
+            packet_queue: self.packet_queue.clone(),
+            bus: self.bus.clone(),
+        };
+
+        tokio::spawn(token.run_until_cancelled_owned(async move {
+            if let Err(e) = feeder.run_loop().await {
+                warn!("Device feeder task exited. Error: {e}");
+            }
+        }));
+    }
+}
+
+/// A Handles receiving of Wireguard peer packets meant for local clients and queues them.
+struct VirtualNetStackFeeder {
+    protocol: Protocol,
+    packet_queue: Arc<Mutex<VecDeque<Bytes>>>,
+    bus: EventBus,
+}
+
+impl VirtualNetStackFeeder {
+    #[instrument(name = "device_feeder", skip_all, fields(proto = %self.protocol))]
+    async fn run_loop(&self) -> Result<()> {
+        let mut receiver = self.bus.subscribe();
+
+        loop {
+            if let Event::PacketFromWG(source_addr, protocol, packet) = receiver.recv().await?
+                && protocol == self.protocol
+            {
+                debug!(
+                    "Received {}-byte {protocol} packet from {source_addr}",
+                    packet.len()
+                );
+                let mut queue = self.packet_queue.lock()?;
+                queue.push_back(packet);
+
+                self.bus
+                    .send(Event::DeviceReceivedNewPacket(protocol))
+                    .context("Sending notif of received packet")?;
+            }
         }
     }
 }
@@ -107,10 +156,7 @@ impl smoltcp::phy::TxToken for TxToken {
 
         let res = f(&mut buffer);
 
-        if let Err(e) = self
-            .bus
-            .send(Event::OutboundPacket(RawPacket(buffer.into())))
-        {
+        if let Err(e) = self.bus.send(Event::PacketToWG(Bytes::from(buffer))) {
             warn!("Failed to send outbound packet {e}");
         }
 

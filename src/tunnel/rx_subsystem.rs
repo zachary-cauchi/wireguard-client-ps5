@@ -2,13 +2,16 @@ use std::net::IpAddr;
 use std::sync::Arc;
 
 use boringtun::noise::TunnResult;
+use bytes::Bytes;
+use smoltcp::wire::{IpProtocol, IpVersion, Ipv4Packet, Ipv6Packet};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info, instrument, trace, warn};
+use tracing::{Level, debug, info, instrument, trace, warn};
 
-use crate::Result;
-use crate::bus::{Event, EventBus, RawPacket};
+use crate::bus::{Event, EventBus};
+use crate::config::Protocol;
 use crate::result::Error;
 use crate::tunnel::{MAX_BUF_SIZE, Tunnel};
+use crate::{ErrorKind, Result};
 
 /// Subsystem for handling incoming packets from a Wireguard tunnel.
 pub struct RxSubsystem {
@@ -34,7 +37,7 @@ impl RxSubsystem {
             tokio::select! {
                 res = self.rx_entry(&mut rx_buf, &mut tx_buf) => {
                     if let Err(e) = res {
-                        warn!("Error from maintenance task. Error: {e}");
+                        warn!("Error from rx task. Error: {e}");
                     }
                 },
                 _ = token.cancelled() => {
@@ -102,12 +105,48 @@ impl RxSubsystem {
         Ok(())
     }
 
-    #[instrument(skip_all, fields(target = %addr))]
+    #[instrument(skip_all, fields(target = %addr), err(level = Level::WARN))]
     async fn send_packet(&self, pkt: &mut [u8], addr: IpAddr) -> Result<()> {
-        debug!("Forwarding received packet.");
+        let protocol = self
+            .determine_transport_protocol(pkt)
+            .ok_or(Error::new(ErrorKind::PacketParsing).with_msg("Packet filtered"))?;
 
-        let raw_packet = RawPacket(pkt.into());
+        debug!("Forwarding received {protocol} packet.");
 
-        self.bus.send(Event::PacketFromWG((addr, raw_packet)))
+        let raw_packet = Bytes::copy_from_slice(pkt);
+
+        self.bus
+            .send(Event::PacketFromWG(addr, protocol, raw_packet))
+    }
+
+    /// Get the transport protocol of the inbound packet, checking that the packet
+    /// is meant for this client and is either TCP or UDP.
+    fn determine_transport_protocol(&self, packet: &[u8]) -> Option<Protocol> {
+        let protocol = match IpVersion::of_packet(packet) {
+            Ok(IpVersion::Ipv4) => {
+                let packet = Ipv4Packet::new_checked(packet)
+                    .ok()
+                    .filter(|p| p.dst_addr() != self.tunnel.local_wg_addr)?;
+                packet.next_header()
+            }
+            Ok(IpVersion::Ipv6) => {
+                let packet = Ipv6Packet::new_checked(packet)
+                    .ok()
+                    .filter(|p| p.dst_addr() != self.tunnel.local_wg_addr)?;
+                packet.next_header()
+            }
+            Err(_) => return None,
+        };
+
+        match protocol {
+            IpProtocol::Tcp => Some(Protocol::Tcp),
+            IpProtocol::Udp => Some(Protocol::Udp),
+            other => {
+                warn!(
+                    "Packet is due for this client, but unexpected protocol found ({other}). Not routing."
+                );
+                None
+            }
+        }
     }
 }

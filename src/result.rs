@@ -5,7 +5,7 @@ use std::{
 };
 
 use boringtun::noise::errors::WireGuardError;
-use smoltcp::socket::tcp::ConnectError;
+use smoltcp::{socket::tcp::ConnectError, wire};
 use tokio::{
     sync::broadcast::error::{RecvError, SendError},
     task::JoinError,
@@ -75,6 +75,8 @@ pub enum ErrorKind {
     PortPoolExhausted,
     BadValue(&'static str),
     TcpStackConnectError(ConnectError),
+    PacketParsing,
+    LockPoisoned,
 }
 
 impl Display for ErrorKind {
@@ -96,6 +98,8 @@ impl Display for ErrorKind {
             PortPoolExhausted => write!(f, "Port pool exhausted"),
             BadValue(msg) => write!(f, "Bad value received ({msg})"),
             TcpStackConnectError(e) => write!(f, "TCP virtual stack connection error ({e})"),
+            PacketParsing => write!(f, "Packet parsing error"),
+            LockPoisoned => write!(f, "Mutex was poisoned"),
         }
     }
 }
@@ -167,6 +171,18 @@ impl<T> From<SendError<T>> for ErrorKind {
 impl From<ConnectError> for ErrorKind {
     fn from(value: ConnectError) -> Self {
         Self::TcpStackConnectError(value)
+    }
+}
+
+impl From<wire::Error> for ErrorKind {
+    fn from(_: wire::Error) -> Self {
+        Self::PacketParsing
+    }
+}
+
+impl<T> From<std::sync::PoisonError<T>> for ErrorKind {
+    fn from(_: std::sync::PoisonError<T>) -> Self {
+        Self::LockPoisoned
     }
 }
 

@@ -62,17 +62,17 @@ impl TxSubsystem {
             }
         };
 
-        let Event::PacketToWG((addr, packet)) = event else {
+        let Event::PacketToWG(packet) = event else {
             debug!("Event filtered.");
             return Ok(());
         };
 
         debug!(
             "Preparing {}-byte packet for WG transmission.",
-            packet.0.len()
+            packet.len()
         );
 
-        let tunn_result = self.tunnel.tunn.lock().await.encapsulate(&packet.0, tx_buf);
+        let tunn_result = self.tunnel.tunn.lock().await.encapsulate(&packet, tx_buf);
 
         match tunn_result {
             TunnResult::WriteToNetwork(pkt) => {

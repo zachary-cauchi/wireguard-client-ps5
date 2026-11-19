@@ -8,7 +8,7 @@ use tokio::sync::broadcast::{self, Receiver, Sender};
 
 use crate::{
     Result,
-    config::{PortForwardRule, VirtualPort},
+    config::{PortForwardRule, Protocol, VirtualPort},
 };
 
 /// A broadcast-based event bus for relaying network packets or events.
@@ -51,7 +51,8 @@ pub enum Event {
     ClientPacket((SocketAddr, RawPacket)),
     OutboundPacket(RawPacket),
     /// Packet received from the Wireguard peer.
-    PacketFromWG((IpAddr, RawPacket)),
+    PacketFromWG(IpAddr, Protocol, Bytes),
     /// Packet going out to the Wireguard peer.
-    PacketToWG((SocketAddr, RawPacket)),
+    PacketToWG(Bytes),
+    DeviceReceivedNewPacket(Protocol),
 }
