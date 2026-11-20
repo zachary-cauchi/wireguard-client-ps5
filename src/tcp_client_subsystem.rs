@@ -9,7 +9,7 @@ use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
 use tokio::sync::RwLock;
 use tokio::sync::broadcast::error::RecvError;
 use tokio_util::sync::CancellationToken;
-use tracing::{Level, debug, error, info, instrument, warn};
+use tracing::{Level, debug, error, info, instrument, trace, warn};
 
 use crate::bus::{Event, EventBus};
 use crate::config::{PortForwardRule, Protocol, VirtualPort};
@@ -202,6 +202,11 @@ impl TcpClientHandler {
                 self.stream.shutdown().await?;
             }
             Event::LocalInboundPacket(vp, packet) if vp == self.virtual_port => {
+                trace!(
+                    "Sending packet from virtual port {vp} to client ({}).",
+                    self.peer
+                );
+
                 self.stream
                     .writable()
                     .await

@@ -58,7 +58,7 @@ async fn main_loop() -> Result<()> {
 
     info!("Config file loaded.");
 
-    let sample_rule = PortForwardRule::try_new("0.0.0.0:60000", "1.1.1.1:80", Protocol::Tcp)?;
+    let sample_rule = config.port_forward_rule.clone();
 
     let bus = EventBus::new();
     let tunnel = Tunnel::init(config.clone(), bus.clone())
@@ -127,6 +127,12 @@ async fn spawn_tasks(
         let tunnel = tunnel.clone();
         let token = token.clone();
         tasks.spawn(async move { tunnel.rx_subsystem().run_loop(token).await });
+    }
+
+    {
+        let tunnel = tunnel.clone();
+        let token = token.clone();
+        tasks.spawn(async move { tunnel.tx_subsystem().run_loop(token).await });
     }
 
     {

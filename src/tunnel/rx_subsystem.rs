@@ -122,21 +122,34 @@ impl RxSubsystem {
     /// Get the transport protocol of the inbound packet, checking that the packet
     /// is meant for this client and is either TCP or UDP.
     fn determine_transport_protocol(&self, packet: &[u8]) -> Option<Protocol> {
-        let protocol = match IpVersion::of_packet(packet) {
+        let (dst_addr, protocol) = match IpVersion::of_packet(packet) {
             Ok(IpVersion::Ipv4) => {
                 let packet = Ipv4Packet::new_checked(packet)
-                    .ok()
-                    .filter(|p| p.dst_addr() != self.tunnel.local_wg_addr)?;
-                packet.next_header()
+                    .inspect_err(|e| warn!("IPv4 packet parsing failed. Error: {e}"))
+                    .ok()?;
+
+                (IpAddr::from(packet.dst_addr()), packet.next_header())
             }
             Ok(IpVersion::Ipv6) => {
                 let packet = Ipv6Packet::new_checked(packet)
-                    .ok()
-                    .filter(|p| p.dst_addr() != self.tunnel.local_wg_addr)?;
-                packet.next_header()
+                    .inspect_err(|e| warn!("IPv6 packet parsing failed. Error: {e}"))
+                    .ok()?;
+
+                (IpAddr::from(packet.dst_addr()), packet.next_header())
             }
-            Err(_) => return None,
+            Err(e) => {
+                warn!("Failed to parse packet as IP packet. Error: {e}");
+                return None;
+            }
         };
+
+        if dst_addr != self.tunnel.local_wg_addr {
+            warn!(
+                "{protocol} packet has dest address {dst_addr} but expected local address {}",
+                self.tunnel.local_wg_addr
+            );
+            return None;
+        }
 
         match protocol {
             IpProtocol::Tcp => Some(Protocol::Tcp),

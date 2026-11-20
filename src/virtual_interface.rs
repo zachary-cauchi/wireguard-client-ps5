@@ -152,9 +152,11 @@ impl TcpVirtualInterface {
             // Process any pending packets if the client socket is available for sending.
             if client_socket.can_send() {
                 let Some(send_queue) = self.packet_queues.get_mut(&virtual_port) else {
+                    warn!("No packet queue for virtual port {virtual_port}.");
                     continue;
                 };
                 let Some(packet_to_send) = send_queue.pop_front() else {
+                    trace!("No packet to send.");
                     continue;
                 };
 

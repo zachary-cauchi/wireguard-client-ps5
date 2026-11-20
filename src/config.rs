@@ -18,7 +18,7 @@ use crate::{
 
 /// Defines a port forwarding rule from the given source socket
 /// to the destination socket, using the specified transport protocol.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct PortForwardRule {
     pub source_addr: SocketAddr,
     pub dest_addr: SocketAddr,
@@ -67,10 +67,11 @@ impl PortForwardRule {
 
 /// Packet/transport protocol type.
 /// TODO Find better place for this.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum Protocol {
-    Udp,
     Tcp,
+    Udp,
 }
 
 impl Display for Protocol {
@@ -153,6 +154,7 @@ fn load_config_file(path: &Path) -> Result<Config> {
 pub struct Config {
     pub interface: Interface,
     pub peer: Peer,
+    pub port_forward_rule: PortForwardRule,
 }
 
 #[derive(Deserialize)]

@@ -63,7 +63,6 @@ impl TxSubsystem {
         };
 
         let Event::PacketToWG(packet) = event else {
-            debug!("Event filtered.");
             return Ok(());
         };
 
