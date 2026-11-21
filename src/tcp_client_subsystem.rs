@@ -93,19 +93,13 @@ impl TcpClientsSubsystem {
 
         debug!("Assigning virtual port {assigned_virtual_port}.");
 
-        self.bus
-            .send(Event::ClientConnected(
-                self.port_forward_rule.clone(),
-                assigned_virtual_port,
-            ))
-            .context("Sending ClientConnected notif")?;
-
         let handler = TcpClientHandler {
             stream,
             peer,
             bus: self.bus.clone(),
             port_pool: self.virtual_port_pool.clone(),
             virtual_port: assigned_virtual_port,
+            port_forward_rule: self.port_forward_rule.clone(),
             is_closed: false,
         };
 
@@ -122,6 +116,7 @@ struct TcpClientHandler {
     bus: EventBus,
     port_pool: PortPool,
     virtual_port: VirtualPort,
+    port_forward_rule: PortForwardRule,
     is_closed: bool,
 }
 
@@ -129,6 +124,14 @@ impl TcpClientHandler {
     #[instrument(name = "tcp_client", skip_all, fields(peer = %self.peer, virtual_port = %self.virtual_port))]
     async fn run_loop(mut self) {
         debug!("Handling client.");
+
+        if let Err(e) = self.bus.send(Event::ClientConnected(
+            self.port_forward_rule.clone(),
+            self.virtual_port,
+        )) {
+            warn!("Failed to send ClientConnected notif. Error: {e}");
+            return;
+        };
 
         let mut rx_buf = [0; 1024 * 64];
 
@@ -190,8 +193,11 @@ impl TcpClientHandler {
 
         let raw_packet = Bytes::copy_from_slice(packet);
 
-        self.bus
-            .send(Event::LocalOutboundPacket(self.virtual_port, raw_packet))
+        self.bus.send(Event::LocalOutboundPacket(
+            self.port_forward_rule.clone(),
+            self.virtual_port,
+            raw_packet,
+        ))
     }
 
     async fn process_event(&mut self, event: Event) -> Result<()> {

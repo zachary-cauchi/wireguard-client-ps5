@@ -1,7 +1,4 @@
-use std::{
-    net::{IpAddr, SocketAddr},
-    sync::Arc,
-};
+use std::net::IpAddr;
 
 use bytes::Bytes;
 use tokio::sync::broadcast::{self, Receiver, Sender};
@@ -35,21 +32,15 @@ impl EventBus {
 }
 
 #[derive(Debug, Clone)]
-#[deprecated(note = "To be replaced with `bytes::Bytes`")]
-pub struct RawPacket(pub Arc<[u8]>);
-
-#[derive(Debug, Clone)]
 pub enum Event {
     /// A local client connected.
     ClientConnected(PortForwardRule, VirtualPort),
     /// A local client disconnected.
     ClientDisconnected(VirtualPort),
     /// A packet from a local client was received and needs to be routed through the virtual stack.
-    LocalOutboundPacket(VirtualPort, Bytes),
+    LocalOutboundPacket(PortForwardRule, VirtualPort, Bytes),
     /// A packet from the virtual stack was received and needs to be routed to its respective local client.
     LocalInboundPacket(VirtualPort, Bytes),
-    ClientPacket((SocketAddr, RawPacket)),
-    OutboundPacket(RawPacket),
     /// Packet received from the Wireguard peer.
     PacketFromWG(IpAddr, Protocol, Bytes),
     /// Packet going out to the Wireguard peer.

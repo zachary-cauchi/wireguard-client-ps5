@@ -36,7 +36,7 @@ impl VirtualNetStack {
     }
 
     /// Spawns a [VirtualNetStackFeeder] task bound to this device and token.
-    pub async fn spawn_feeder_task(&self, token: CancellationToken) {
+    pub fn spawn_feeder_task(&self, token: CancellationToken) {
         let feeder = VirtualNetStackFeeder {
             protocol: self.protocol,
             packet_queue: self.packet_queue.clone(),
@@ -71,8 +71,8 @@ impl VirtualNetStackFeeder {
                     "Received {}-byte {protocol} packet from {source_addr}",
                     packet.len()
                 );
-                let mut queue = self.packet_queue.lock()?;
-                queue.push_back(packet);
+
+                self.packet_queue.lock()?.push_back(packet);
 
                 self.bus
                     .send(Event::DeviceReceivedNewPacket(protocol))

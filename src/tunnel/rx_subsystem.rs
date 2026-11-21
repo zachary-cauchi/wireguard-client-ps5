@@ -122,6 +122,8 @@ impl RxSubsystem {
     /// Get the transport protocol of the inbound packet, checking that the packet
     /// is meant for this client and is either TCP or UDP.
     fn determine_transport_protocol(&self, packet: &[u8]) -> Option<Protocol> {
+        use IpProtocol::*;
+
         let (dst_addr, protocol) = match IpVersion::of_packet(packet) {
             Ok(IpVersion::Ipv4) => {
                 let packet = Ipv4Packet::new_checked(packet)
@@ -152,8 +154,8 @@ impl RxSubsystem {
         }
 
         match protocol {
-            IpProtocol::Tcp => Some(Protocol::Tcp),
-            IpProtocol::Udp => Some(Protocol::Udp),
+            Tcp | Icmp | Icmpv6 => Some(Protocol::Tcp),
+            Udp => Some(Protocol::Udp),
             other => {
                 warn!(
                     "Packet is due for this client, but unexpected protocol found ({other}). Not routing."

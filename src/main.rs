@@ -18,7 +18,7 @@ use tracing::{error, info, level_filters::LevelFilter};
 pub use crate::result::{ErrorKind, Result};
 use crate::{
     bus::EventBus,
-    config::{PortForwardRule, Protocol, get_config},
+    config::{Protocol, get_config},
     logging::Ps5LoggingBuilder,
     result::WrapWithMsg,
     tcp_client_subsystem::TcpClientsSubsystem,

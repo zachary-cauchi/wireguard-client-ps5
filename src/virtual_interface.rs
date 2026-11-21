@@ -100,6 +100,10 @@ impl TcpVirtualInterface {
 
         let mut receiver = self.bus.subscribe();
 
+        debug!("Spawning device feeder task.");
+
+        self.device.spawn_feeder_task(token.clone());
+
         loop {
             let poll_sleep = self.poll_sleep;
 
@@ -229,7 +233,7 @@ impl TcpVirtualInterface {
                 self.process_connected_client(port_forward, virtual_port)
                     .await
             }
-            LocalOutboundPacket(virtual_port, packet)
+            LocalOutboundPacket(_, virtual_port, packet)
                 if self.virtual_port_handle_map.contains_key(&virtual_port) =>
             {
                 self.process_local_outbound_packet(virtual_port, packet)
