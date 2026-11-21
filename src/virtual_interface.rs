@@ -347,7 +347,7 @@ impl TcpVirtualInterface {
 }
 
 /// Wrapper for sleeping at according to the advised delays from the virtual interface.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum InterfacePollSleep {
     /// Sleep forever.
     NeverWake,
@@ -361,10 +361,11 @@ impl InterfacePollSleep {
     /// Create [Self] from the an optional duration
     /// (the output of `smoltcp::iface::interface::Interface::poll_delay`)
     /// and the number of assigned virtual ports.
+    #[instrument(ret(level = Level::TRACE))]
     pub fn from_advisory_duration(advisory: Option<Duration>, assigned_ports_count: usize) -> Self {
         match (advisory, assigned_ports_count) {
-            (None, 0) => Self::Immediate,
-            (None, _) => Self::NeverWake,
+            (None, 0) => Self::NeverWake,
+            (None, _) => Self::Immediate,
             (Some(Duration::ZERO), _) => Self::Immediate,
             (Some(duration), _) => {
                 // let duration = std::time::Duration::from_millis(duration.total_millis());
@@ -379,19 +380,9 @@ impl InterfacePollSleep {
 
     pub async fn sleep(&self) {
         match self {
-            Self::Immediate => {
-                trace!("Awaking immediately");
-                ()
-            }
+            Self::Immediate => (),
             Self::NeverWake => tokio::time::sleep(Duration::MAX.into()).await,
-            Self::Until(deadline) => {
-                let now = tokio::time::Instant::now();
-                trace!(
-                    "Time now: {now:?}. Sleeping until {deadline:?} ({}).",
-                    (*deadline - now).as_millis()
-                );
-                tokio::time::sleep_until(*deadline).await
-            }
+            Self::Until(deadline) => tokio::time::sleep_until(*deadline).await,
         }
     }
 }
