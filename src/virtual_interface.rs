@@ -248,8 +248,16 @@ impl TcpVirtualInterface {
             ClientDisconnected(virtual_port) => {
                 self.process_disconnected_client(virtual_port).await
             }
+            DeviceReceivedNewPacket(Protocol::Tcp) => self.process_device_received_new_packet(),
             _ => Ok(()),
         }
+    }
+
+    /// The virtual device received new packets.
+    /// Set the next sleep to `Immediate` so we process them immediately.
+    fn process_device_received_new_packet(&mut self) -> Result<()> {
+        self.poll_sleep.set_immediate();
+        Ok(())
     }
 
     /// Queue a given outbound packet for routing.
