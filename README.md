@@ -8,9 +8,9 @@ A Wireguard client for the PS5.
 * [x] Establish connection with Wireguard peer.
 * [x] Keep the connection alive via handshake.
 * [x] Accept TCP connections from clients.
-* [ ] Send packets onto Wireguard peer.
-* [ ] Route packets from connecting clients to the Wireguard network.
-* [ ] Configurable routes.
+* [x] Send packets onto Wireguard peer.
+* [x] Route packets from connecting clients to the Wireguard network.
+* [x] Configurable routes.
 * [ ] Accept UDP connections from clients.
 * [ ] Resolve DNS queries.
 

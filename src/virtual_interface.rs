@@ -90,7 +90,7 @@ impl TcpVirtualInterface {
             interface,
             virtual_port_handle_map: HashMap::new(),
             packet_queues: HashMap::new(),
-            poll_sleep: InterfacePollSleep::NeverEnd,
+            poll_sleep: InterfacePollSleep::NeverWake,
         }
     }
 
@@ -137,6 +137,7 @@ impl TcpVirtualInterface {
     /// * Perform a poll operation on the interface, filling and draining the rx/tx buffers.
     /// * For each virtual port and handle, try send and receive packets if the socket can send/receive.
     /// * Calculate the next advised poll deadline.
+    #[instrument(skip_all, err(level = Level::WARN))]
     async fn process_pending_stack_packets(&mut self) -> Result<()> {
         let processing_start = Instant::now();
 
@@ -204,9 +205,14 @@ impl TcpVirtualInterface {
             }
         }
 
+        trace!("Client socket processing done. Picking next poll sleep duration.");
+
         // Once processing is done, calculate the next due sleep interval.
         let advisory_duration = self.interface.poll_delay(processing_start, &self.sockets);
-        self.poll_sleep = InterfacePollSleep::from_advisory_duration(advisory_duration);
+        self.poll_sleep = InterfacePollSleep::from_advisory_duration(
+            advisory_duration,
+            self.virtual_port_handle_map.len(),
+        );
 
         Ok(())
     }
@@ -222,7 +228,7 @@ impl TcpVirtualInterface {
             let _ = self.packet_queues.remove(virtual_port);
             self.sockets.remove(*handle);
 
-            true
+            false
         });
     }
 
@@ -302,19 +308,18 @@ impl TcpVirtualInterface {
         Ok(())
     }
 
-    /// Find a client socket by the given socket and disconnect it from the virtual interface.
+    /// Find a client socket by the given socket and close it on the virtual interface.
+    /// This also queues the socket to be removed and the virtual port freed.
     #[instrument(skip(self), err(level = Level::ERROR))]
     async fn process_disconnected_client(&mut self, virtual_port: VirtualPort) -> Result<()> {
-        let handle = self
-            .virtual_port_handle_map
-            .remove(&virtual_port)
-            .ok_or(Error::new(ErrorKind::BadKey(
-                "No client found for given virtual port",
-            )))?;
+        let Some(handle) = self.virtual_port_handle_map.get(&virtual_port) else {
+            // Socket must already have been disconnected.
+            return Ok(());
+        };
 
         trace!("Closing socket with handle {handle}.");
 
-        let client_socket = self.sockets.get_mut::<tcp::Socket<'_>>(handle);
+        let client_socket = self.sockets.get_mut::<tcp::Socket<'_>>(*handle);
         client_socket.close();
 
         self.poll_sleep.set_immediate();
@@ -337,7 +342,7 @@ impl TcpVirtualInterface {
 #[derive(Clone, Copy)]
 enum InterfacePollSleep {
     /// Sleep forever.
-    NeverEnd,
+    NeverWake,
     /// Don't sleep at all.
     Immediate,
     /// Sleep until this deadline.
@@ -346,12 +351,17 @@ enum InterfacePollSleep {
 
 impl InterfacePollSleep {
     /// Create [Self] from the an optional duration
-    /// (the output of `smoltcp::iface::interface::Interface::poll_delay`).
-    pub fn from_advisory_duration(advisory: Option<Duration>) -> Self {
-        match advisory {
-            None => Self::Immediate,
-            Some(Duration::ZERO) => Self::Immediate,
-            Some(duration) => Self::Until(tokio::time::Instant::now() + duration.into()),
+    /// (the output of `smoltcp::iface::interface::Interface::poll_delay`)
+    /// and the number of assigned virtual ports.
+    pub fn from_advisory_duration(advisory: Option<Duration>, assigned_ports_count: usize) -> Self {
+        match (advisory, assigned_ports_count) {
+            (None, 0) => Self::Immediate,
+            (None, _) => Self::NeverWake,
+            (Some(Duration::ZERO), _) => Self::Immediate,
+            (Some(duration), _) => {
+                // let duration = std::time::Duration::from_millis(duration.total_millis());
+                Self::Until(tokio::time::Instant::now() + duration.into())
+            }
         }
     }
 
@@ -361,9 +371,19 @@ impl InterfacePollSleep {
 
     pub async fn sleep(&self) {
         match self {
-            Self::Immediate => {}
-            Self::NeverEnd => tokio::time::sleep(Duration::MAX.into()).await,
-            Self::Until(deadline) => tokio::time::sleep_until(*deadline).await,
+            Self::Immediate => {
+                trace!("Awaking immediately");
+                ()
+            }
+            Self::NeverWake => tokio::time::sleep(Duration::MAX.into()).await,
+            Self::Until(deadline) => {
+                let now = tokio::time::Instant::now();
+                trace!(
+                    "Time now: {now:?}. Sleeping until {deadline:?} ({}).",
+                    (*deadline - now).as_millis()
+                );
+                tokio::time::sleep_until(*deadline).await
+            }
         }
     }
 }
