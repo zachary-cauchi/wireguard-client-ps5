@@ -18,7 +18,6 @@ use smoltcp::wire::IpAddress;
 use smoltcp::wire::IpCidr;
 use smoltcp::wire::Ipv4Cidr;
 use smoltcp::wire::Ipv6Cidr;
-use tokio::sync::broadcast::Receiver;
 use tokio_util::sync::CancellationToken;
 use tracing::error;
 use tracing::trace;
@@ -113,11 +112,20 @@ impl TcpVirtualInterface {
                         warn!("Failed to process virtual interface packets. Error: {e}");
                     }
                 },
-                res = self.recv_event(&mut receiver) => {
-                    if let Err(e) = res {
+                res = receiver.recv() => {
+                    let event = match res {
+                        Ok(event) => event,
+                        Err(e) => {
+                            warn!("Failed to receive event. Error: {e}");
+                            continue;
+                        }
+                    };
+
+                    if let Err(e) = self.process_event(event).await {
                         warn!("Failed to process event. Error: {e}");
                     }
-                },
+                }
+
                 _ = token.cancelled() => {
                     debug!("Cancellation caught. exiting.");
 
@@ -189,7 +197,10 @@ impl TcpVirtualInterface {
             if client_socket.can_recv() {
                 match client_socket.recv(|b| (b.len(), Bytes::copy_from_slice(b))) {
                     Ok(data) => {
-                        trace!("Received {} bytes from {virtual_port}.", data.len());
+                        trace!(
+                            "Received {} bytes from virtual port {virtual_port}.",
+                            data.len()
+                        );
                         if !data.is_empty() {
                             self.bus
                                 .send(Event::LocalInboundPacket(*virtual_port, data))
@@ -232,9 +243,9 @@ impl TcpVirtualInterface {
         });
     }
 
-    async fn recv_event(&mut self, receiver: &mut Receiver<Event>) -> Result<()> {
+    async fn process_event(&mut self, event: Event) -> Result<()> {
         use Event::*;
-        match receiver.recv().await? {
+        match event {
             ClientConnected(port_forward, virtual_port) => {
                 self.process_connected_client(port_forward, virtual_port)
                     .await

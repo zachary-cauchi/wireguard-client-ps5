@@ -45,5 +45,6 @@ pub enum Event {
     PacketFromWG(IpAddr, Protocol, Bytes),
     /// Packet going out to the Wireguard peer.
     PacketToWG(Bytes),
+    /// Virtual interface device received new packets.
     DeviceReceivedNewPacket(Protocol),
 }

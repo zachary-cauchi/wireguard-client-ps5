@@ -204,6 +204,8 @@ impl TcpClientHandler {
         debug!("Received event. Event: {event:?}");
         match event {
             Event::ClientDisconnected(vp) if vp == self.virtual_port => {
+                trace!("Client disconnected from virtual interface. Closing TCP connection.");
+
                 self.is_closed = true;
                 self.stream.shutdown().await?;
             }

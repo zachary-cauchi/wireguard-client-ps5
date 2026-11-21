@@ -3,9 +3,9 @@ use std::sync::Arc;
 
 use boringtun::noise::TunnResult;
 use bytes::Bytes;
-use smoltcp::wire::{IpProtocol, IpVersion, Ipv4Packet, Ipv6Packet};
+use smoltcp::wire::{IpProtocol, IpVersion, Ipv4Packet, Ipv6Packet, PrettyPrinter};
 use tokio_util::sync::CancellationToken;
-use tracing::{Level, debug, info, instrument, trace, warn};
+use tracing::{Level, debug, enabled, info, instrument, trace, warn};
 
 use crate::bus::{Event, EventBus};
 use crate::config::Protocol;
@@ -105,8 +105,8 @@ impl RxSubsystem {
         Ok(())
     }
 
-    #[instrument(skip_all, fields(target = %addr), err(level = Level::WARN))]
-    async fn send_packet(&self, pkt: &mut [u8], addr: IpAddr) -> Result<()> {
+    #[instrument(skip_all, fields(src_addr = %src_addr), err(level = Level::WARN))]
+    async fn send_packet(&self, pkt: &mut [u8], src_addr: IpAddr) -> Result<()> {
         let protocol = self
             .determine_transport_protocol(pkt)
             .ok_or(Error::new(ErrorKind::PacketParsing).with_msg("Packet filtered"))?;
@@ -116,7 +116,7 @@ impl RxSubsystem {
         let raw_packet = Bytes::copy_from_slice(pkt);
 
         self.bus
-            .send(Event::PacketFromWG(addr, protocol, raw_packet))
+            .send(Event::PacketFromWG(src_addr, protocol, raw_packet))
     }
 
     /// Get the transport protocol of the inbound packet, checking that the packet
@@ -130,12 +130,22 @@ impl RxSubsystem {
                     .inspect_err(|e| warn!("IPv4 packet parsing failed. Error: {e}"))
                     .ok()?;
 
+                if enabled!(Level::TRACE) {
+                    let printer = PrettyPrinter::<Ipv4Packet<&[u8]>>::new("", &packet);
+                    trace!("Parsed IPv4 packet: {}", printer);
+                }
+
                 (IpAddr::from(packet.dst_addr()), packet.next_header())
             }
             Ok(IpVersion::Ipv6) => {
                 let packet = Ipv6Packet::new_checked(packet)
                     .inspect_err(|e| warn!("IPv6 packet parsing failed. Error: {e}"))
                     .ok()?;
+
+                if enabled!(Level::TRACE) {
+                    let printer = PrettyPrinter::<Ipv6Packet<&[u8]>>::new("", &packet);
+                    trace!("Parsed IPv6 packet: {}", printer);
+                }
 
                 (IpAddr::from(packet.dst_addr()), packet.next_header())
             }
