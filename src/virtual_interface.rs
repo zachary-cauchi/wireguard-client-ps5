@@ -156,67 +156,12 @@ impl TcpVirtualInterface {
                 .poll(processing_start, &mut self.device, &mut self.sockets);
 
         if poll_result == PollResult::SocketStateChanged {
-            trace!("Poll completed. Processing pending TCP packets.");
+            trace!("Poll completed. Socket has pending state changes.");
         }
 
-        for (virtual_port, handle) in self.virtual_port_handle_map.iter() {
-            let client_socket = self.sockets.get_mut::<tcp::Socket>(*handle);
+        self.send_pending_packets();
 
-            // Process any pending packets if the client socket is available for sending.
-            if client_socket.can_send() {
-                let Some(send_queue) = self.packet_queues.get_mut(&virtual_port) else {
-                    warn!("No packet queue for virtual port {virtual_port}.");
-                    continue;
-                };
-                let Some(packet_to_send) = send_queue.pop_front() else {
-                    trace!("No packet to send.");
-                    continue;
-                };
-
-                // Try send the whole packet. If not all the packet bytes were sent,
-                // the socket buffer is full. In which case, push the packet back on top.
-                let packet_len = packet_to_send.len();
-
-                match client_socket.send_slice(&packet_to_send) {
-                    Ok(sent_count) if sent_count < packet_len => {
-                        let remainder =
-                            Bytes::copy_from_slice(&packet_to_send[sent_count..packet_len]);
-                        send_queue.push_front(remainder);
-
-                        trace!("Sent {sent_count} bytes of {packet_len}-byte packet.");
-                    }
-                    Ok(send_count) => {
-                        trace!("Sent {send_count} bytes to virtual port {virtual_port}.")
-                    }
-                    Err(e) => {
-                        error!("Failed to send packet to virtual port {virtual_port}. Error: {e}");
-                    }
-                }
-            }
-
-            if client_socket.can_recv() {
-                match client_socket.recv(|b| (b.len(), Bytes::copy_from_slice(b))) {
-                    Ok(data) => {
-                        trace!(
-                            "Received {} bytes from virtual port {virtual_port}.",
-                            data.len()
-                        );
-                        if !data.is_empty() {
-                            self.bus
-                                .send(Event::LocalInboundPacket(*virtual_port, data))
-                                .context("Sending LocalInboundPacket event")?;
-                        }
-                    }
-                    Err(e) => {
-                        error!(
-                            "Failed to receive bytes from virtual port {virtual_port}. Error: {e}"
-                        );
-                    }
-                }
-            }
-        }
-
-        trace!("Client socket processing done. Picking next poll sleep duration.");
+        self.receive_incoming_packets();
 
         // Once processing is done, calculate the next due sleep interval.
         let advisory_duration = self.interface.poll_delay(processing_start, &self.sockets);
@@ -226,6 +171,82 @@ impl TcpVirtualInterface {
         );
 
         Ok(())
+    }
+
+    /// Send any queued packets to their relevant sockets.
+    #[instrument(skip_all)]
+    fn send_pending_packets(&mut self) {
+        for (virtual_port, handle) in &self.virtual_port_handle_map {
+            // SAFETY: We never insert non-TCP sockets into this set.
+            let client_socket = self.sockets.get_mut::<tcp::Socket>(*handle);
+
+            if !client_socket.can_send() {
+                trace!("Socket not yet ready to transmit.");
+                continue;
+            }
+
+            let Some(send_queue) = self.packet_queues.get_mut(&virtual_port) else {
+                warn!("No packet queue for virtual port {virtual_port}.");
+                continue;
+            };
+
+            let Some(packet_to_send) = send_queue.pop_front() else {
+                continue;
+            };
+
+            // Try send the whole packet. If not all the packet bytes were sent,
+            // the socket buffer is full. In which case, push the packet back on top.
+            let packet_len = packet_to_send.len();
+
+            match client_socket.send_slice(&packet_to_send) {
+                Ok(sent_count) if sent_count < packet_len => {
+                    let remainder = Bytes::copy_from_slice(&packet_to_send[sent_count..packet_len]);
+                    send_queue.push_front(remainder);
+
+                    trace!("Sent {sent_count} bytes of {packet_len}-byte packet.");
+                }
+                Ok(send_count) => {
+                    trace!("Sent {send_count} bytes to virtual port {virtual_port}.")
+                }
+                Err(e) => {
+                    error!("Failed to send packet to virtual port {virtual_port}. Error: {e}");
+                }
+            }
+        }
+    }
+
+    #[instrument(skip_all)]
+    fn receive_incoming_packets(&mut self) {
+        for (virtual_port, handle) in &self.virtual_port_handle_map {
+            // SAFETY: We never insert non-TCP sockets into this set.
+            let client_socket = self.sockets.get_mut::<tcp::Socket>(*handle);
+
+            if !client_socket.can_recv() {
+                continue;
+            }
+
+            let data = match client_socket.recv(|b| (b.len(), Bytes::copy_from_slice(b))) {
+                Ok(data) => data,
+                Err(e) => {
+                    error!("Failed to receive bytes from virtual port {virtual_port}. Error: {e}");
+                    continue;
+                }
+            };
+
+            trace!(
+                "Received {} bytes from virtual port {virtual_port}.",
+                data.len()
+            );
+
+            if !data.is_empty() {
+                if let Err(e) = self
+                    .bus
+                    .send(Event::LocalInboundPacket(*virtual_port, data))
+                {
+                    error!("Failed to send LocalInboundPacket event. Error: {e}");
+                }
+            }
+        }
     }
 
     fn remove_disconnected_clients(&mut self) {
@@ -372,7 +393,6 @@ impl InterfacePollSleep {
     /// Create [Self] from the an optional duration
     /// (the output of `smoltcp::iface::interface::Interface::poll_delay`)
     /// and the number of assigned virtual ports.
-    #[instrument(ret(level = Level::TRACE))]
     pub fn from_advisory_duration(advisory: Option<Duration>, assigned_ports_count: usize) -> Self {
         match (advisory, assigned_ports_count) {
             (None, 0) => Self::NeverWake,
