@@ -9,7 +9,7 @@ use std::{
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Deserializer, de};
-use tracing::{debug, instrument, warn};
+use tracing::{debug, instrument, level_filters::LevelFilter, warn};
 
 use crate::{
     ErrorKind, Result,
@@ -152,9 +152,18 @@ fn load_config_file(path: &Path) -> Result<Config> {
 
 #[derive(Deserialize)]
 pub struct Config {
+    pub general: General,
     pub interface: Interface,
     pub peer: Peer,
     pub port_forward_rule: PortForwardRule,
+}
+
+#[derive(Deserialize)]
+pub struct General {
+    #[serde(deserialize_with = "deserialize_levelfilter")]
+    pub klog_level: LevelFilter,
+    #[serde(deserialize_with = "deserialize_levelfilter")]
+    pub std_level: LevelFilter,
 }
 
 #[derive(Deserialize)]
@@ -170,6 +179,15 @@ pub struct Peer {
     pub preshared_key: PresharedKey,
     pub endpoint: String,
     pub allowed_ips: Vec<IpCidr>,
+}
+
+fn deserialize_levelfilter<'de, D>(deserializer: D) -> std::result::Result<LevelFilter, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let str = <&str>::deserialize(deserializer)?;
+
+    LevelFilter::from_str(str).map_err(de::Error::custom)
 }
 
 fn deserialize_base64_str<'de, D>(deserializer: D) -> std::result::Result<Vec<u8>, D::Error>

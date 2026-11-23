@@ -31,7 +31,6 @@ use crate::config::PortForwardRule;
 use crate::config::Protocol;
 use crate::config::VirtualPort;
 use crate::result::Error;
-use crate::result::WrapWithMsg;
 use crate::virtual_net_stack::VirtualNetStack;
 
 const MAX_PACKET_BYTES: usize = 1024 * 64;

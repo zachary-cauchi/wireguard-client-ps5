@@ -7,19 +7,19 @@ pub mod tunnel;
 pub mod virtual_interface;
 pub mod virtual_net_stack;
 
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
-use ps5::Toast;
+use ps5::{Toast, payload::exit};
 use ps5_std_rt as _;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info, level_filters::LevelFilter};
+use tracing::{error, info};
 
 pub use crate::result::{ErrorKind, Result};
 use crate::{
     bus::EventBus,
-    config::{Protocol, get_config},
-    logging::Ps5LoggingBuilder,
+    config::{Config, Protocol, get_config},
+    logging::{Ps5LoggingBuilder, klog_log},
     result::WrapWithMsg,
     tcp_client_subsystem::TcpClientsSubsystem,
     tunnel::Tunnel,
@@ -29,13 +29,27 @@ use crate::{
 
 #[tokio::main]
 async fn main() {
+    let config = match get_config() {
+        Ok(c) => Arc::new(c),
+        Err(e) => {
+            klog_log(format_args!("Config parse failed. Error: {e}"));
+
+            Toast::new("Config parse failed.")
+                .sub("Check config and rerun.")
+                .send()
+                .unwrap();
+
+            exit(1);
+        }
+    };
+
     Ps5LoggingBuilder::new()
-        .with_klog_level(LevelFilter::TRACE)
-        .with_std_level(LevelFilter::TRACE)
+        .with_klog_level(config.general.klog_level)
+        .with_std_level(config.general.std_level)
         .install_global()
         .expect("Global logging set up successfully");
 
-    if let Err(e) = main_loop().await {
+    if let Err(e) = main_loop(config).await {
         if let ErrorKind::PendingConfig = e.kind() {
             error!("No app configuration found. Add one, then rerun.");
 
@@ -50,11 +64,10 @@ async fn main() {
     }
 }
 
-async fn main_loop() -> Result<()> {
+async fn main_loop(config: Arc<Config>) -> Result<()> {
     info!("Initialising Wireguard client.");
 
     Toast::new("Initialising Wireguard client.").send()?;
-    let config = Arc::new(get_config().context("Getting app config")?);
 
     info!("Config file loaded.");
 
@@ -68,8 +81,7 @@ async fn main_loop() -> Result<()> {
 
     info!("Tunnel initialised.");
 
-    let tcp_client_subsystem =
-        TcpClientsSubsystem::new(bus.clone(), sample_rule.clone(), "0.0.0.0:60000").await?;
+    let tcp_client_subsystem = TcpClientsSubsystem::new(bus.clone(), sample_rule.clone()).await?;
     let virtual_device = VirtualNetStack::new(Protocol::Tcp, 1500, bus.clone());
     let virtual_interface = TcpVirtualInterface::new(
         config.interface.address.ip_addr,
@@ -163,10 +175,6 @@ async fn cancellation_task(token: CancellationToken) -> Result<()> {
         }
         _ = token.cancelled() => {
             info!("Cancellation received. Shutting down.");
-        }
-        _ = tokio::time::sleep(Duration::from_secs(300)) => {
-            info!("Task has lived too long. Triggering cancellation.");
-            token.cancel();
         }
     }
     Ok(())

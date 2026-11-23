@@ -11,8 +11,12 @@ A Wireguard client for the PS5.
 * [x] Send packets onto Wireguard peer.
 * [x] Route packets from connecting clients to the Wireguard network.
 * [x] Configurable routes.
-* [ ] Accept UDP connections from clients.
+* [ ] Minimal web page for logging the following:
+  * [ ] Log msgs.
+  * [ ] Event-bus events, including sender and receiver.
+  * [ ] Packet activity/capture.
 * [ ] Resolve DNS queries.
+* [ ] Accept UDP connections from clients.
 
 # References
 

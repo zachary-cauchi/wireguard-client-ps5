@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
+use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::RwLock;
 use tokio::sync::broadcast::error::RecvError;
 use tokio_util::sync::CancellationToken;
@@ -27,12 +27,8 @@ pub struct TcpClientsSubsystem {
 }
 
 impl TcpClientsSubsystem {
-    pub async fn new(
-        bus: EventBus,
-        port_forward_rule: PortForwardRule,
-        addr: impl ToSocketAddrs,
-    ) -> Result<Self> {
-        let socket = TcpListener::bind(addr).await?;
+    pub async fn new(bus: EventBus, port_forward_rule: PortForwardRule) -> Result<Self> {
+        let socket = TcpListener::bind(port_forward_rule.source_addr).await?;
         let virtual_port_pool = PortPool::new(Protocol::Tcp);
 
         Ok(Self {
@@ -123,7 +119,10 @@ struct TcpClientHandler {
 impl TcpClientHandler {
     #[instrument(name = "tcp_client", skip_all, fields(peer = %self.peer, virtual_port = %self.virtual_port))]
     async fn run_loop(mut self) {
-        debug!("Handling client.");
+        info!(
+            "Client started with port forwarding rule '{}'.",
+            self.port_forward_rule
+        );
 
         if let Err(e) = self.bus.send(Event::ClientConnected(
             self.port_forward_rule.clone(),
@@ -186,6 +185,8 @@ impl TcpClientHandler {
         if let Err(e) = self.bus.send(Event::ClientDisconnected(self.virtual_port)) {
             warn!("Failed to send client disconnection event. Error: {e}");
         }
+
+        info!("Client connection closed.");
     }
 
     async fn process_packet(&self, packet: &[u8]) -> Result<()> {
