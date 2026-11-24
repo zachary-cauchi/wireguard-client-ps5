@@ -8,7 +8,7 @@ use std::sync::Arc;
 use boringtun::{noise::Tunn, x25519::StaticSecret};
 use tokio::net::UdpSocket;
 use tokio::sync::Mutex;
-use tracing::{debug, instrument, trace, warn};
+use tracing::{debug, instrument, trace};
 
 use crate::bus::EventBus;
 use crate::config::{Config, PresharedKey, PrivateKey, PublicKey};

@@ -23,7 +23,7 @@ use crate::{
     logging::{Ps5LoggingBuilder, klog_log},
     result::WrapWithMsg,
     tunnel::Tunnel,
-    virtual_interface::TcpVirtualInterface,
+    virtual_interface::tcp::TcpVirtualInterface,
     virtual_net_stack::VirtualNetStack,
 };
 
