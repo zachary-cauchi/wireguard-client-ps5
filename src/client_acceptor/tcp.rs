@@ -23,13 +23,17 @@ pub struct TcpClientsSubsystem {
     port_forward_rule: PortForwardRule,
     socket: TcpListener,
     bus: EventBus,
-    virtual_port_pool: PortPool,
+    virtual_port_pool: TcpPortPool,
 }
 
 impl TcpClientsSubsystem {
     pub async fn new(bus: EventBus, port_forward_rule: PortForwardRule) -> Result<Self> {
+        if port_forward_rule.protocol != Protocol::Tcp {
+            return Err(Error::new(ErrorKind::BadValue("Non-TCP rule supplied")));
+        }
+
         let socket = TcpListener::bind(port_forward_rule.source_addr).await?;
-        let virtual_port_pool = PortPool::new(Protocol::Tcp);
+        let virtual_port_pool = TcpPortPool::new();
 
         Ok(Self {
             socket,
@@ -110,7 +114,7 @@ struct TcpClientHandler {
     stream: TcpStream,
     peer: SocketAddr,
     bus: EventBus,
-    port_pool: PortPool,
+    port_pool: TcpPortPool,
     virtual_port: VirtualPort,
     port_forward_rule: PortForwardRule,
     is_closed: bool,
@@ -235,15 +239,15 @@ impl TcpClientHandler {
 
 /// Represents a pool of available ports for assignment.
 #[derive(Clone)]
-pub struct PortPool {
-    inner: Arc<RwLock<PortPoolInner>>,
+pub struct TcpPortPool {
+    inner: Arc<RwLock<TcpPortPoolInner>>,
 }
 
-impl PortPool {
+impl TcpPortPool {
     pub const PORT_RANGE: Range<u16> = 60001u16..60019u16;
 
-    pub fn new(protocol: Protocol) -> Self {
-        let inner = PortPoolInner::new(protocol, Self::PORT_RANGE);
+    pub fn new() -> Self {
+        let inner = TcpPortPoolInner::new(Self::PORT_RANGE);
 
         Self {
             inner: Arc::new(RwLock::new(inner)),
@@ -259,25 +263,23 @@ impl PortPool {
     }
 }
 
-struct PortPoolInner {
+struct TcpPortPoolInner {
     queue: VecDeque<u16>,
     port_range: Range<u16>,
-    protocol: Protocol,
 }
 
-impl PortPoolInner {
-    pub fn new(protocol: Protocol, range: Range<u16>) -> Self {
+impl TcpPortPoolInner {
+    pub fn new(range: Range<u16>) -> Self {
         Self {
             queue: VecDeque::from_iter(range.clone()),
             port_range: range,
-            protocol,
         }
     }
 
     pub fn next(&mut self) -> Result<VirtualPort> {
         self.queue
             .pop_front()
-            .map(|p| VirtualPort(self.protocol, p))
+            .map(|p| VirtualPort(Protocol::Tcp, p))
             .ok_or(Error::new(ErrorKind::PortPoolExhausted))
     }
 
@@ -285,7 +287,7 @@ impl PortPoolInner {
     pub fn release(&mut self, port: VirtualPort) -> Result<()> {
         if !self.port_range.contains(&port.1) {
             return Err(Error::new(ErrorKind::BadValue("port outside range")));
-        } else if self.protocol != port.0 {
+        } else if port.0 != Protocol::Tcp {
             return Err(Error::new(ErrorKind::BadValue("wrong protocol")));
         } else if self.queue.contains(&port.1) {
             return Err(Error::new(ErrorKind::BadValue("port already in pool")));

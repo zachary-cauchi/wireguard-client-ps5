@@ -1,8 +1,8 @@
 pub mod bus;
+pub mod client_acceptor;
 pub mod config;
 pub mod logging;
 pub mod result;
-pub mod tcp_client_subsystem;
 pub mod tunnel;
 pub mod virtual_interface;
 pub mod virtual_net_stack;
@@ -18,10 +18,10 @@ use tracing::{error, info};
 pub use crate::result::{ErrorKind, Result};
 use crate::{
     bus::EventBus,
+    client_acceptor::tcp::TcpClientsSubsystem,
     config::{Config, Protocol, get_config},
     logging::{Ps5LoggingBuilder, klog_log},
     result::WrapWithMsg,
-    tcp_client_subsystem::TcpClientsSubsystem,
     tunnel::Tunnel,
     virtual_interface::TcpVirtualInterface,
     virtual_net_stack::VirtualNetStack,
