@@ -49,6 +49,8 @@ impl UdpClientsSubystem {
 
         let mut rx_buf = [0u8; 64 * 1024];
 
+        let mut receiver = self.bus.subscribe();
+
         loop {
             tokio::select! {
                 _ = token.cancelled() => {
@@ -68,6 +70,20 @@ impl UdpClientsSubystem {
 
                     if let Err(e) = self.recv_datagram(datagram, peer).await {
                         warn!("Failed to process datagram from peer {peer}. Error: {e}");
+                        continue;
+                    }
+                }
+                res = receiver.recv() => {
+                    let event = match res {
+                        Ok(event) => event,
+                        Err(e) => {
+                            warn!("Failed to receive event. Error: {e}");
+                            continue;
+                        }
+                    };
+
+                    if let Err(e) = self.process_event(event).await {
+                        warn!("Failed to process event. Error: {e}");
                         continue;
                     }
                 }
@@ -99,6 +115,42 @@ impl UdpClientsSubystem {
             virtual_port,
             Bytes::copy_from_slice(datagram),
         ))?;
+
+        Ok(())
+    }
+
+    /// Process inbound packets which need to be forwarded to a peer.
+    #[instrument(skip_all, err(level = Level::ERROR))]
+    async fn process_event(&mut self, event: Event) -> Result<()> {
+        let (port, datagram) = match event {
+            Event::LocalInboundPacket(VirtualPort(Protocol::Udp, port), datagram) => {
+                (port, datagram)
+            }
+            _ => return Ok(()),
+        };
+
+        let Some(peer) = self.port_pool.get_peer_address(port)? else {
+            return Ok(());
+        };
+
+        self.socket.writable().await?;
+
+        self.send_full_slice(peer, &datagram).await?;
+
+        Ok(())
+    }
+
+    /// Send all bytes in the given datagram to the peer client.
+    /// If not all the packet was sent, then a sub-slice is made over the remaining bytes
+    /// and that slice is sent, repeating this process until the full original datagram is sent.
+    async fn send_full_slice(&self, peer: SocketAddr, datagram: &[u8]) -> Result<()> {
+        let mut pending_bytes = datagram;
+
+        while !pending_bytes.is_empty() {
+            let sent_bytes_count = self.socket.send_to(pending_bytes, peer).await?;
+
+            pending_bytes = pending_bytes.split_at(sent_bytes_count).1;
+        }
 
         Ok(())
     }
