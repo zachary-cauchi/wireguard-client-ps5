@@ -149,8 +149,12 @@ impl UdpClientsSubystem {
         while !pending_bytes.is_empty() {
             let sent_bytes_count = self.socket.send_to(pending_bytes, peer).await?;
 
+            trace!("Sent {sent_bytes_count} bytes.");
+
             pending_bytes = pending_bytes.split_at(sent_bytes_count).1;
         }
+
+        trace!("Datagram sent successfully.");
 
         Ok(())
     }

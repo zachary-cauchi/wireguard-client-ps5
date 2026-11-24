@@ -154,23 +154,16 @@ impl UdpEndpoint {
     async fn send_full_slice(&self, packet: &[u8]) -> Result<()> {
         let mut pending_bytes = packet;
 
-        loop {
-            let bytes_count = pending_bytes.len();
+        while !pending_bytes.is_empty() {
             let sent_bytes_count = self.socket.send(pending_bytes).await?;
 
             trace!("Sent {sent_bytes_count} bytes.");
 
-            if sent_bytes_count == bytes_count {
-                trace!("Packet sent successfully.");
-                return Ok(());
-            } else if sent_bytes_count < bytes_count {
-                pending_bytes = &pending_bytes[sent_bytes_count..];
-            } else {
-                warn!(
-                    "Unexpected byte-count greater than original slice length. Sent bytes: {}, payload byte count: {}",
-                    sent_bytes_count, bytes_count
-                );
-            }
+            pending_bytes = pending_bytes.split_at(sent_bytes_count).1;
         }
+
+        trace!("Packet sent successfully.");
+
+        Ok(())
     }
 }
