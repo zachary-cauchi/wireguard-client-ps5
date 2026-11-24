@@ -5,7 +5,10 @@ use std::{
 };
 
 use boringtun::noise::errors::WireGuardError;
-use smoltcp::{socket::tcp::ConnectError, wire};
+use smoltcp::{
+    socket::{tcp::ConnectError, udp},
+    wire,
+};
 use tokio::{
     sync::broadcast::error::{RecvError, SendError},
     task::JoinError,
@@ -77,6 +80,7 @@ pub enum ErrorKind {
     TcpStackConnectError(ConnectError),
     PacketParsing,
     LockPoisoned,
+    UdpRoutingError(udp::SendError),
 }
 
 impl Display for ErrorKind {
@@ -100,6 +104,7 @@ impl Display for ErrorKind {
             TcpStackConnectError(e) => write!(f, "TCP virtual stack connection error ({e})"),
             PacketParsing => write!(f, "Packet parsing error"),
             LockPoisoned => write!(f, "Mutex was poisoned"),
+            UdpRoutingError(e) => write!(f, "Error sending UDP packet. Error: {e}"),
         }
     }
 }
@@ -112,6 +117,7 @@ impl std::error::Error for Error {
             FileIO(e) => Some(e),
             TomlDeserialization(e) => Some(e),
             TaskJoining(e) => Some(e),
+            UdpRoutingError(e) => Some(e),
             _ => None,
         }
     }
@@ -183,6 +189,12 @@ impl From<wire::Error> for ErrorKind {
 impl<T> From<std::sync::PoisonError<T>> for ErrorKind {
     fn from(_: std::sync::PoisonError<T>) -> Self {
         Self::LockPoisoned
+    }
+}
+
+impl From<udp::SendError> for ErrorKind {
+    fn from(value: udp::SendError) -> Self {
+        Self::UdpRoutingError(value)
     }
 }
 

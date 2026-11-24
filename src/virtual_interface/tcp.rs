@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::net::IpAddr;
 
@@ -12,10 +11,8 @@ use smoltcp::iface::SocketSet;
 use smoltcp::socket::tcp;
 use smoltcp::socket::tcp::SocketBuffer;
 use smoltcp::socket::tcp::State;
-use smoltcp::time::{Duration, Instant};
+use smoltcp::time::Instant;
 use smoltcp::wire::HardwareAddress;
-use smoltcp::wire::IpAddress;
-use smoltcp::wire::IpCidr;
 use tokio_util::sync::CancellationToken;
 use tracing::error;
 use tracing::trace;
@@ -29,7 +26,8 @@ use crate::config::PortForwardRule;
 use crate::config::Protocol;
 use crate::config::VirtualPort;
 use crate::result::Error;
-use crate::virtual_interface::addr_to_cidr;
+use crate::virtual_interface::InterfacePollSleep;
+use crate::virtual_interface::get_addresses;
 use crate::virtual_net_stack::VirtualNetStack;
 
 const MAX_PACKET_BYTES: usize = 1024 * 64;
@@ -59,9 +57,9 @@ impl TcpVirtualInterface {
         bus: EventBus,
         mut device: VirtualNetStack,
     ) -> Self {
-        // Construct a list of CIDR addresses based on the port forward rules and origin address.
         debug!("Initialising TCP virtual interface.");
 
+        // Construct a list of CIDR addresses based on the port forward rules and origin address.
         let addresses = get_addresses(origin_peer_ip, port_forwards, Protocol::Tcp);
         let config = Config::new(HardwareAddress::Ip);
 
@@ -374,66 +372,4 @@ impl TcpVirtualInterface {
 
         tcp::Socket::new(rx_buffer, tx_buffer)
     }
-}
-
-/// Wrapper for sleeping at according to the advised delays from the virtual interface.
-#[derive(Clone, Copy, Debug)]
-enum InterfacePollSleep {
-    /// Sleep forever.
-    NeverWake,
-    /// Don't sleep at all.
-    Immediate,
-    /// Sleep until this deadline.
-    Until(tokio::time::Instant),
-}
-
-impl InterfacePollSleep {
-    /// Create [Self] from the an optional duration
-    /// (the output of `smoltcp::iface::interface::Interface::poll_delay`)
-    /// and the number of assigned virtual ports.
-    pub fn from_advisory_duration(advisory: Option<Duration>, assigned_ports_count: usize) -> Self {
-        match (advisory, assigned_ports_count) {
-            (None, 0) => Self::NeverWake,
-            (None, _) => Self::Immediate,
-            (Some(Duration::ZERO), _) => Self::Immediate,
-            (Some(duration), _) => {
-                // let duration = std::time::Duration::from_millis(duration.total_millis());
-                Self::Until(tokio::time::Instant::now() + duration.into())
-            }
-        }
-    }
-
-    pub fn set_immediate(&mut self) {
-        *self = Self::Immediate;
-    }
-
-    pub async fn sleep(&self) {
-        match self {
-            Self::Immediate => (),
-            Self::NeverWake => tokio::time::sleep(Duration::MAX.into()).await,
-            Self::Until(deadline) => tokio::time::sleep_until(*deadline).await,
-        }
-    }
-}
-
-fn get_addresses(
-    peer_ip: IpAddr,
-    port_forwards: &[PortForwardRule],
-    filter_protocol: Protocol,
-) -> Vec<IpCidr> {
-    let mut set = HashSet::new();
-
-    set.insert(peer_ip);
-
-    port_forwards
-        .into_iter()
-        .filter(|pf| pf.protocol == filter_protocol)
-        .for_each(|pf| {
-            set.insert(pf.dest_addr.ip().into());
-        });
-
-    set.into_iter()
-        .map(|ip| IpAddress::from(ip))
-        .map(addr_to_cidr)
-        .collect()
 }
