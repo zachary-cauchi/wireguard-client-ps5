@@ -1,12 +1,11 @@
 use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::ops::Range;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use bytes::Bytes;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::RwLock;
 use tokio::sync::broadcast::error::RecvError;
 use tokio_util::sync::CancellationToken;
 use tracing::{Level, debug, error, info, instrument, trace, warn};
@@ -88,7 +87,6 @@ impl TcpClientsSubsystem {
         let assigned_virtual_port = self
             .virtual_port_pool
             .next()
-            .await
             .context("Selecting virtual TCP port")?;
 
         debug!("Assigning virtual port {assigned_virtual_port}.");
@@ -182,7 +180,7 @@ impl TcpClientHandler {
             }
         }
 
-        if let Err(e) = self.port_pool.release(self.virtual_port).await {
+        if let Err(e) = self.port_pool.release(self.virtual_port) {
             warn!("Failed to release port. Error: {e}");
         }
 
@@ -254,12 +252,12 @@ impl TcpPortPool {
         }
     }
 
-    pub async fn next(&self) -> Result<VirtualPort> {
-        self.inner.write().await.next()
+    pub fn next(&self) -> Result<VirtualPort> {
+        self.inner.write()?.next()
     }
 
-    pub async fn release(&self, port: VirtualPort) -> Result<()> {
-        self.inner.write().await.release(port)
+    pub fn release(&self, port: VirtualPort) -> Result<()> {
+        self.inner.write()?.release(port)
     }
 }
 

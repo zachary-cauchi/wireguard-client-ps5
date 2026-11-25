@@ -15,8 +15,10 @@ pub struct EventBus {
 }
 
 impl EventBus {
+    pub const CHANNEL_CAPACITY: usize = 64;
+
     pub fn new() -> Self {
-        let (sender, _) = broadcast::channel(32);
+        let (sender, _) = broadcast::channel(Self::CHANNEL_CAPACITY);
 
         Self { sender }
     }
