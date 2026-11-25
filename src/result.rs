@@ -80,7 +80,10 @@ pub enum ErrorKind {
     TcpStackConnectError(ConnectError),
     PacketParsing,
     LockPoisoned,
+    /// Error sending UDP packet on virtual stack.
     UdpRoutingError(udp::SendError),
+    /// Error binding to virtual stack UDP port.
+    UdpBindError(udp::BindError),
 }
 
 impl Display for ErrorKind {
@@ -105,6 +108,7 @@ impl Display for ErrorKind {
             PacketParsing => write!(f, "Packet parsing error"),
             LockPoisoned => write!(f, "Mutex was poisoned"),
             UdpRoutingError(e) => write!(f, "Error sending UDP packet. Error: {e}"),
+            UdpBindError(e) => write!(f, "Error binding to virtual UDP socket. Error: {e}"),
         }
     }
 }
@@ -118,6 +122,7 @@ impl std::error::Error for Error {
             TomlDeserialization(e) => Some(e),
             TaskJoining(e) => Some(e),
             UdpRoutingError(e) => Some(e),
+            UdpBindError(e) => Some(e),
             _ => None,
         }
     }
@@ -195,6 +200,12 @@ impl<T> From<std::sync::PoisonError<T>> for ErrorKind {
 impl From<udp::SendError> for ErrorKind {
     fn from(value: udp::SendError) -> Self {
         Self::UdpRoutingError(value)
+    }
+}
+
+impl From<udp::BindError> for ErrorKind {
+    fn from(value: udp::BindError) -> Self {
+        Self::UdpBindError(value)
     }
 }
 

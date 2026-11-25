@@ -6,26 +6,26 @@ use std::{
 use bytes::Bytes;
 use smoltcp::{
     iface::{Config, Interface, PollResult, SocketHandle, SocketSet},
-    socket::{
-        tcp,
-        udp::{self, UdpMetadata},
-    },
+    socket::udp::{self, PacketMetadata, UdpMetadata},
     time::Instant,
-    wire::HardwareAddress,
+    wire::{HardwareAddress, IpAddress},
 };
 use tokio_util::sync::CancellationToken;
 use tracing::{Level, debug, error, info, instrument, trace, warn};
 
 use crate::{
     Result,
-    bus::{Event, EventBus},
+    bus::{
+        Event::{self},
+        EventBus,
+    },
     config::{PortForwardRule, Protocol, VirtualPort},
-    result::WrapWithMsg,
     virtual_interface::{InterfacePollSleep, get_addresses},
     virtual_net_stack::VirtualNetStack,
 };
 
-const MAX_DATAGRAM_BYTES: usize = 64 * 1024;
+const DATA_BUFFER_SIZE: usize = 64 * 1024;
+const META_BUFFER_SIZE: usize = 16;
 
 pub struct UdpVirtualInterface {
     origin_peer_ip: IpAddr,
@@ -39,13 +39,13 @@ pub struct UdpVirtualInterface {
 }
 
 impl UdpVirtualInterface {
-    #[instrument(name = "tcp_virt_int_new", skip_all, fields(origin_peer_ip = %origin_peer_ip))]
+    #[instrument(name = "udp_virt_int_new", skip_all, fields(origin_peer_ip = %origin_peer_ip))]
     pub fn new(
         origin_peer_ip: IpAddr,
         port_forwards: &[PortForwardRule],
         bus: EventBus,
         mut device: VirtualNetStack,
-    ) -> Self {
+    ) -> Result<Self> {
         debug!("Initialising UDP virtual interface.");
 
         // Construct a list of CIDR addresses based on the port forward rules and origin address.
@@ -66,7 +66,14 @@ impl UdpVirtualInterface {
             })
         });
 
-        Self {
+        let mut sockets = SocketSet::new([]);
+
+        for port_forward in port_forwards {
+            debug!("Initialising server socket with port forward rule '{port_forward}'.");
+            sockets.add(Self::create_server_socket(port_forward)?);
+        }
+
+        Ok(Self {
             origin_peer_ip,
             bus,
             device,
@@ -75,7 +82,7 @@ impl UdpVirtualInterface {
             virtual_port_handle_map: HashMap::new(),
             packet_queues: HashMap::new(),
             poll_sleep: InterfacePollSleep::NeverWake,
-        }
+        })
     }
 
     #[instrument(name = "udp_virt_int", skip_all, err(level = Level::ERROR))]
@@ -124,6 +131,7 @@ impl UdpVirtualInterface {
         Ok(())
     }
 
+    /// Perform a poll on the virtual interface stack, sending and receiving any due packets.
     #[instrument(skip_all, err(level = Level::WARN))]
     async fn process_pending_stack_packets(&mut self) -> Result<()> {
         let processing_start = Instant::now();
@@ -192,7 +200,7 @@ impl UdpVirtualInterface {
                 continue;
             }
 
-            let (packet, metadata) = match client_socket.recv() {
+            let (packet, _metadata) = match client_socket.recv() {
                 Ok(received) => received,
                 Err(e) => {
                     error!("Failed to receive packet. Error: {e}");
@@ -209,7 +217,58 @@ impl UdpVirtualInterface {
         }
     }
 
+    /// Queue events to be handled by the virtual interface.
     async fn process_event(&mut self, event: Event) -> Result<()> {
-        Ok(())
+        match event {
+            Event::LocalOutboundPacket(forward_rule, virtual_port, datagram) => {
+                if let Some(packet_queue) = self.packet_queues.get_mut(&virtual_port) {
+                    packet_queue.push_back((forward_rule, datagram));
+                } else {
+                    let client_socket = self.create_client_socket(virtual_port)?;
+                    let client_handle = self.sockets.add(client_socket);
+
+                    self.virtual_port_handle_map
+                        .insert(virtual_port, client_handle);
+                    self.packet_queues.insert(virtual_port, VecDeque::new());
+                }
+
+                self.poll_sleep.set_immediate();
+                Ok(())
+            }
+            Event::DeviceReceivedNewPacket(Protocol::Udp) => {
+                self.poll_sleep.set_immediate();
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+
+    fn create_server_socket(forward_rule: &PortForwardRule) -> Result<udp::Socket<'static>> {
+        let mut socket = Self::create_socket(META_BUFFER_SIZE, DATA_BUFFER_SIZE);
+
+        socket.bind((forward_rule.dest_addr.ip(), forward_rule.dest_addr.port()))?;
+
+        Ok(socket)
+    }
+
+    fn create_client_socket(&mut self, virtual_port: VirtualPort) -> Result<udp::Socket<'static>> {
+        let mut socket = Self::create_socket(META_BUFFER_SIZE, DATA_BUFFER_SIZE);
+
+        socket.bind((IpAddress::from(self.origin_peer_ip), virtual_port.1))?;
+
+        Ok(socket)
+    }
+
+    /// Create a UDP socket with the given metadata buffer size and data buffer size.
+    fn create_socket(meta_buff_size: usize, data_buff_size: usize) -> udp::Socket<'static> {
+        let tx_meta = vec![PacketMetadata::EMPTY; meta_buff_size];
+        let tx_data = vec![0u8; data_buff_size];
+        let rx_meta = vec![PacketMetadata::EMPTY; meta_buff_size];
+        let rx_data = vec![0u8; data_buff_size];
+
+        let rx_buffer = udp::PacketBuffer::new(rx_meta, rx_data);
+        let tx_buffer = udp::PacketBuffer::new(tx_meta, tx_data);
+
+        udp::Socket::new(rx_buffer, tx_buffer)
     }
 }
