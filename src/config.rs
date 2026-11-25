@@ -155,7 +155,7 @@ pub struct Config {
     pub general: General,
     pub interface: Interface,
     pub peer: Peer,
-    pub port_forward_rule: PortForwardRule,
+    pub port_forward_rule: Vec<PortForwardRule>,
 }
 
 #[derive(Deserialize)]

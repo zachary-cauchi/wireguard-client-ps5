@@ -18,12 +18,12 @@ use tracing::{error, info};
 pub use crate::result::{ErrorKind, Result};
 use crate::{
     bus::EventBus,
-    client_acceptor::tcp::TcpClientsSubsystem,
-    config::{Config, Protocol, get_config},
+    client_acceptor::{tcp::TcpClientsSubsystem, udp::UdpClientsSubystem},
+    config::{Config, PortForwardRule, Protocol, get_config},
     logging::{Ps5LoggingBuilder, klog_log},
     result::WrapWithMsg,
     tunnel::Tunnel,
-    virtual_interface::tcp::TcpVirtualInterface,
+    virtual_interface::{tcp::TcpVirtualInterface, udp::UdpVirtualInterface},
     virtual_net_stack::VirtualNetStack,
 };
 
@@ -71,8 +71,6 @@ async fn main_loop(config: Arc<Config>) -> Result<()> {
 
     info!("Config file loaded.");
 
-    let sample_rule = config.port_forward_rule.clone();
-
     let bus = EventBus::new();
     let tunnel = Tunnel::init(config.clone(), bus.clone())
         .await
@@ -81,21 +79,31 @@ async fn main_loop(config: Arc<Config>) -> Result<()> {
 
     info!("Tunnel initialised.");
 
-    let tcp_client_subsystem = TcpClientsSubsystem::new(bus.clone(), sample_rule.clone()).await?;
-    let virtual_device = VirtualNetStack::new(Protocol::Tcp, 1500, bus.clone());
-    let virtual_interface = TcpVirtualInterface::new(
+    let tcp_virtual_device = VirtualNetStack::new(Protocol::Tcp, 1500, bus.clone());
+    let udp_virtual_device = VirtualNetStack::new(Protocol::Udp, 1500, bus.clone());
+
+    let tcp_virtual_interface = TcpVirtualInterface::new(
         config.interface.address.ip_addr,
-        &[sample_rule],
+        &config.port_forward_rule,
         bus.clone(),
-        virtual_device,
+        tcp_virtual_device,
     );
+
+    let udp_virtual_interface = UdpVirtualInterface::new(
+        config.interface.address.ip_addr,
+        &config.port_forward_rule,
+        bus.clone(),
+        udp_virtual_device,
+    )?;
 
     let token = CancellationToken::new();
 
     let mut tasks = spawn_tasks(
         &tunnel,
-        tcp_client_subsystem,
-        virtual_interface,
+        bus,
+        &config.port_forward_rule,
+        tcp_virtual_interface,
+        udp_virtual_interface,
         token.clone(),
     )
     .await?;
@@ -123,8 +131,10 @@ async fn main_loop(config: Arc<Config>) -> Result<()> {
 /// Spawn all main tasks.
 async fn spawn_tasks(
     tunnel: &Arc<Tunnel>,
-    tcp_client_subsystem: TcpClientsSubsystem,
-    virtual_interface: TcpVirtualInterface,
+    bus: EventBus,
+    port_forward_rules: &[PortForwardRule],
+    tcp_virtual_interface: TcpVirtualInterface,
+    udp_virtual_interface: UdpVirtualInterface,
     token: CancellationToken,
 ) -> Result<JoinSet<Result<()>>> {
     let mut tasks = JoinSet::new();
@@ -154,12 +164,29 @@ async fn spawn_tasks(
 
     {
         let token = token.clone();
-        tasks.spawn(async move { tcp_client_subsystem.run_loop(token).await });
+        tasks.spawn(async move { tcp_virtual_interface.run_loop(token).await });
     }
 
     {
         let token = token.clone();
-        tasks.spawn(async move { virtual_interface.run_loop(token).await });
+        tasks.spawn(async move { udp_virtual_interface.run_loop(token).await });
+    }
+
+    for port_forward_rule in port_forward_rules {
+        let bus = bus.clone();
+        let token = token.clone();
+
+        match port_forward_rule.protocol {
+            Protocol::Tcp => {
+                let subsystem =
+                    TcpClientsSubsystem::new(bus.clone(), port_forward_rule.clone()).await?;
+                tasks.spawn(async move { subsystem.run_loop(token).await });
+            }
+            Protocol::Udp => {
+                let subsystem = UdpClientsSubystem::new(bus, port_forward_rule.clone()).await?;
+                tasks.spawn(async move { subsystem.run_loop(token).await });
+            }
+        }
     }
 
     Ok(tasks)
