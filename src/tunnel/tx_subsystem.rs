@@ -1,10 +1,8 @@
 use std::sync::Arc;
 
 use boringtun::noise::TunnResult;
-use tokio::sync::broadcast::Receiver;
-use tokio::sync::broadcast::error::RecvError;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info, instrument, warn};
+use tracing::{debug, info, instrument, warn};
 
 use crate::Result;
 use crate::bus::{Event, EventBus};
@@ -32,10 +30,9 @@ impl TxSubsystem {
             tx_buf.fill(0);
 
             tokio::select! {
-                res = self.process_event(&mut receiver, &mut tx_buf) => {
-                    if let Err(e) = res {
-                        warn!("Error occurred in event bus handler. Error: {e}");
-                        break;
+                event = receiver.recv_or_panic() => {
+                    if let Err(e) = self.process_event(event, &mut tx_buf).await {
+                        warn!("Error occurred processing event. Error: {e}");
                     }
                 },
                 _ = token.cancelled() => {
@@ -52,16 +49,7 @@ impl TxSubsystem {
     }
 
     #[instrument(name = "send_pkt", skip_all)]
-    async fn process_event(&self, receiver: &mut Receiver<Event>, tx_buf: &mut [u8]) -> Result<()> {
-        let event = match receiver.recv().await {
-            Ok(e) => e,
-            Err(e @ RecvError::Closed) => return Err(e.into()),
-            Err(RecvError::Lagged(n)) => {
-                error!("Bus receiver lagged behind by {n} events. Packets likely dropped.");
-                return Ok(());
-            }
-        };
-
+    async fn process_event(&self, event: Event, tx_buf: &mut [u8]) -> Result<()> {
         let Event::PacketToWG(packet) = event else {
             return Ok(());
         };

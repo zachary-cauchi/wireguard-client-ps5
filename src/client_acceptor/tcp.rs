@@ -6,9 +6,8 @@ use std::sync::{Arc, RwLock};
 use bytes::Bytes;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::broadcast::error::RecvError;
 use tokio_util::sync::CancellationToken;
-use tracing::{Level, debug, error, info, instrument, trace, warn};
+use tracing::{Level, debug, info, instrument, trace, warn};
 
 use crate::bus::{Event, EventBus};
 use crate::config::{PortForwardRule, Protocol, VirtualPort};
@@ -161,18 +160,7 @@ impl TcpClientHandler {
                         warn!("Failed to process packet. Error: {e}");
                     }
                 }
-                res = bus_recv.recv() => {
-                    let event = match res {
-                        Ok(e) => e,
-                        Err(RecvError::Closed) => {
-                            error!("Event bus is closed. Closing stream.");
-                            break;
-                        },
-                        Err(RecvError::Lagged(n)) => {
-                            error!("Bus receiver lagged behind by {n} events. Packets likely dropped.");
-                            continue;
-                        }
-                    };
+                event = bus_recv.recv_or_panic() => {
                     if let Err(e) = self.process_event(event).await {
                         warn!("Error encountered when processing event. Error: {e}")
                     }

@@ -1,7 +1,8 @@
 use std::net::IpAddr;
 
 use bytes::Bytes;
-use tokio::sync::broadcast::{self, Receiver, Sender};
+use tokio::sync::broadcast::{self, Receiver, Sender, error::RecvError};
+use tracing::{instrument, warn};
 
 use crate::{
     Result,
@@ -23,13 +24,39 @@ impl EventBus {
         Self { sender }
     }
 
-    pub fn subscribe(&self) -> Receiver<Event> {
-        self.sender.subscribe()
+    pub fn subscribe(&self) -> BusReceiver {
+        BusReceiver {
+            receiver: self.sender.subscribe(),
+        }
     }
 
     pub fn send(&self, event: Event) -> Result<()> {
         self.sender.send(event)?;
         Ok(())
+    }
+}
+
+pub struct BusReceiver {
+    receiver: Receiver<Event>,
+}
+
+impl BusReceiver {
+    /// Receive an event message, expecting a successfull response.
+    /// Panics if the receiver is closed.
+    /// Warns if the receiver is lagging.
+    #[instrument(name = "recv", skip_all)]
+    pub async fn recv_or_panic(&mut self) -> Event {
+        loop {
+            match self.receiver.recv().await {
+                Ok(event) => return event,
+                Err(RecvError::Closed) => panic!("Receiver closed."),
+                Err(RecvError::Lagged(n)) => warn!("Lagged by {n} messages."),
+            }
+        }
+    }
+
+    pub async fn recv(&mut self) -> Result<Event> {
+        Ok(self.receiver.recv().await?)
     }
 }
 
@@ -50,3 +77,18 @@ pub enum Event {
     /// Virtual interface device received new packets.
     DeviceReceivedNewPacket(Protocol),
 }
+
+// pub struct NewEventBus {
+//     inner: HashMap<EventKey, (mpsc::Sender<Event>, Option<mpsc::Receiver<Event>>)>,
+// }
+
+// #[derive(Clone, Copy, Debug, Hash)]
+// pub enum EventKey {
+//     TcpClientConnected,
+//     TcpClientDisconnected,
+//     LocalOutboundPacket,
+//     LocalInboundPacket,
+//     PacketFromWG,
+//     PacketToWG,
+//     DeviceReceivedNewPacket(Protocol),
+// }

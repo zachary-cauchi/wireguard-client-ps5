@@ -16,7 +16,7 @@ A Wireguard client for the PS5.
   * [ ] Event-bus events, including sender and receiver.
   * [ ] Packet activity/capture.
 * [ ] Resolve DNS queries.
-* [ ] Accept UDP connections from clients.
+* [x] Accept UDP connections from clients.
 
 # References
 

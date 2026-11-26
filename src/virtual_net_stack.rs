@@ -64,7 +64,8 @@ impl VirtualNetStackFeeder {
         let mut receiver = self.bus.subscribe();
 
         loop {
-            if let Event::PacketFromWG(source_addr, protocol, packet) = receiver.recv().await?
+            if let Event::PacketFromWG(source_addr, protocol, packet) =
+                receiver.recv_or_panic().await
                 && protocol == self.protocol
             {
                 debug!(

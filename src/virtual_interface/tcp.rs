@@ -108,20 +108,11 @@ impl TcpVirtualInterface {
                         warn!("Failed to process virtual interface packets. Error: {e}");
                     }
                 },
-                res = receiver.recv() => {
-                    let event = match res {
-                        Ok(event) => event,
-                        Err(e) => {
-                            warn!("Failed to receive event. Error: {e}");
-                            continue;
-                        }
-                    };
-
+                event = receiver.recv_or_panic() => {
                     if let Err(e) = self.process_event(event).await {
                         warn!("Failed to process event. Error: {e}");
                     }
-                }
-
+                },
                 _ = token.cancelled() => {
                     debug!("Cancellation caught. exiting.");
 
