@@ -32,12 +32,18 @@ impl RxSubsystem {
         info!("RX - Started.");
 
         loop {
-            rx_buf.fill(0);
-
             tokio::select! {
-                res = self.rx_entry(&mut rx_buf, &mut tx_buf) => {
-                    if let Err(e) = res {
-                        warn!("Error from rx task. Error: {e}");
+                res = self.tunnel.endpoint.recv(&mut rx_buf) => {
+                    let datagram = match res {
+                        Ok(datagram) => datagram,
+                        Err(e) => {
+                            warn!("Error waiting for incoming datagrams. Error: {e}");
+                            continue;
+                        }
+                    };
+
+                    if let Err(e) = self.rx_entry(datagram, &mut tx_buf).await {
+                        warn!("Error processing datagram. Error: {e}");
                     }
                 },
                 _ = token.cancelled() => {
@@ -53,22 +59,46 @@ impl RxSubsystem {
         Ok(())
     }
 
-    async fn rx_entry(&self, rx_buf: &mut [u8], tx_buf: &mut [u8]) -> Result<()> {
-        let raw_packet = self.tunnel.endpoint.recv(rx_buf).await?;
-
+    /// Processes a new incoming datagram.
+    async fn rx_entry(&self, datagram: &[u8], tx_buf: &mut [u8]) -> Result<()> {
         trace!(
-            "Received {}-byte packet. Processing. Packet: {raw_packet:?}",
-            raw_packet.len()
+            "Received {}-byte packet. Processing. Packet: {datagram:?}",
+            datagram.len()
         );
 
-        let mut tunn = self.tunnel.tunn.lock().await;
-
-        let tunn_result = tunn.decapsulate(None, raw_packet, tx_buf);
+        let tunn_result = self
+            .tunnel
+            .tunn
+            .lock()
+            .await
+            .decapsulate(None, datagram, tx_buf);
 
         match tunn_result {
             TunnResult::Done => {}
             TunnResult::WriteToNetwork(new_packet) => {
                 self.tunnel.endpoint.send_full_slice(new_packet).await?;
+                let mut tunn = self.tunnel.tunn.lock().await;
+
+                loop {
+                    let next_result = tunn.decapsulate(None, &[], tx_buf);
+
+                    match next_result {
+                        TunnResult::Done => {
+                            trace!("All done, no more packets.");
+                            break;
+                        }
+                        TunnResult::WriteToNetwork(pkt) => {
+                            self.tunnel.endpoint.send_full_slice(pkt).await?
+                        }
+                        TunnResult::Err(e) => {
+                            return Err(Error::from(e).with_msg("Error from decapsulating msg"));
+                        }
+                        _ => {
+                            warn!("Unexpected result type (next_result:?).");
+                            break;
+                        }
+                    }
+                }
             }
             TunnResult::WriteToTunnelV4(packet, dst) => {
                 self.send_packet(packet, IpAddr::V4(dst))?;
@@ -79,32 +109,10 @@ impl RxSubsystem {
             TunnResult::Err(e) => return Err(e.into()),
         }
 
-        loop {
-            tx_buf.fill(0);
-
-            let next_result = tunn.decapsulate(None, &[], tx_buf);
-
-            match next_result {
-                TunnResult::Done => {
-                    trace!("All done, no more packets.");
-                    break;
-                }
-                TunnResult::WriteToNetwork(pkt) => {
-                    self.tunnel.endpoint.send_full_slice(pkt).await?
-                }
-                TunnResult::Err(e) => {
-                    return Err(Error::from(e).with_msg("Error from decapsulating msg"));
-                }
-                _ => {
-                    warn!("Unexpected result type (next_result:?).");
-                    break;
-                }
-            }
-        }
-
         Ok(())
     }
 
+    /// Send a received datagram onto the event bus.
     #[instrument(skip_all, fields(src_addr = %src_addr), err(level = Level::WARN))]
     fn send_packet(&self, pkt: &mut [u8], src_addr: IpAddr) -> Result<()> {
         let protocol = self
