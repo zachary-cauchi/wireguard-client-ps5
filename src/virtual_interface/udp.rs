@@ -160,7 +160,6 @@ impl UdpVirtualInterface {
             let client_socket = self.sockets.get_mut::<udp::Socket>(*handle);
 
             if !client_socket.can_send() {
-                trace!("Socket not yet ready to send.");
                 continue;
             }
 
@@ -191,7 +190,6 @@ impl UdpVirtualInterface {
             let client_socket = self.sockets.get_mut::<udp::Socket>(*handle);
 
             if !client_socket.can_recv() {
-                trace!("Socket not yet ready to receive.");
                 continue;
             }
 

@@ -32,8 +32,6 @@ impl MaintenanceSubsystem {
         let mut interval = interval(Duration::from_millis(250));
 
         loop {
-            buffer.fill(0);
-
             tokio::select! {
                 res = self.maintenance_entry(&mut buffer) => {
                     match res {

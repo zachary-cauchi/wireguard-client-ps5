@@ -27,8 +27,6 @@ impl TxSubsystem {
         let mut receiver = self.bus.subscribe();
 
         loop {
-            tx_buf.fill(0);
-
             tokio::select! {
                 event = receiver.recv_or_panic() => {
                     if let Err(e) = self.process_event(event, &mut tx_buf).await {

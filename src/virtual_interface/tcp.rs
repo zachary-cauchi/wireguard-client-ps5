@@ -172,7 +172,6 @@ impl TcpVirtualInterface {
             let client_socket = self.sockets.get_mut::<tcp::Socket>(*handle);
 
             if !client_socket.can_send() {
-                trace!("Socket not yet ready to transmit.");
                 continue;
             }
 
