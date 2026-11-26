@@ -53,10 +53,6 @@ impl UdpClientsSubystem {
 
         loop {
             tokio::select! {
-                _ = token.cancelled() => {
-                    info!("Cancellation triggered. Exiting.");
-                    break;
-                }
                 res = self.socket.recv_from(&mut rx_buf) => {
                     let (byte_count, peer) = match res {
                         Ok(ok) => ok,
@@ -78,6 +74,10 @@ impl UdpClientsSubystem {
                         warn!("Failed to process event. Error: {e}");
                         continue;
                     }
+                }
+                _ = token.cancelled() => {
+                    info!("Cancellation triggered. Exiting.");
+                    break;
                 }
             }
         }

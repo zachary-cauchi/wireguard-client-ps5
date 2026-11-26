@@ -47,10 +47,6 @@ impl TcpClientsSubsystem {
 
         loop {
             tokio::select! {
-                _ = token.cancelled() => {
-                    info!("Cancellation triggered. Exiting.");
-                    break;
-                }
                 res = self.socket.accept() => {
                     let token = token.clone();
                     let process_res = match res {
@@ -64,6 +60,10 @@ impl TcpClientsSubsystem {
                     if let Err(e) = process_res {
                         warn!("Failed to process socket. Error: {e}");
                     }
+                }
+                _ = token.cancelled() => {
+                    info!("Cancellation triggered. Exiting.");
+                    break;
                 }
             }
         }

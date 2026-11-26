@@ -71,10 +71,10 @@ impl RxSubsystem {
                 self.tunnel.endpoint.send_full_slice(new_packet).await?;
             }
             TunnResult::WriteToTunnelV4(packet, dst) => {
-                self.send_packet(packet, IpAddr::V4(dst)).await?;
+                self.send_packet(packet, IpAddr::V4(dst))?;
             }
             TunnResult::WriteToTunnelV6(packet, dst) => {
-                self.send_packet(packet, IpAddr::V6(dst)).await?;
+                self.send_packet(packet, IpAddr::V6(dst))?;
             }
             TunnResult::Err(e) => return Err(e.into()),
         }
@@ -106,7 +106,7 @@ impl RxSubsystem {
     }
 
     #[instrument(skip_all, fields(src_addr = %src_addr), err(level = Level::WARN))]
-    async fn send_packet(&self, pkt: &mut [u8], src_addr: IpAddr) -> Result<()> {
+    fn send_packet(&self, pkt: &mut [u8], src_addr: IpAddr) -> Result<()> {
         let protocol = self
             .determine_transport_protocol(pkt)
             .ok_or(Error::new(ErrorKind::PacketParsing).with_msg("Packet filtered"))?;

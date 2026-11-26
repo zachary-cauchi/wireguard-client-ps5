@@ -102,15 +102,19 @@ impl TcpVirtualInterface {
         loop {
             let poll_sleep = self.poll_sleep;
 
+            // The `biased` ensures we always poll the receiver first.
+            // Since the `poll_sleep` can always return, it takes away from the fairness
+            // of the receiver.
             tokio::select! {
-                _ = poll_sleep.sleep() => {
-                    if let Err(e) = self.process_pending_stack_packets().await {
-                        warn!("Failed to process virtual interface packets. Error: {e}");
-                    }
-                },
+                biased;
                 event = receiver.recv_or_panic() => {
                     if let Err(e) = self.process_event(event).await {
                         warn!("Failed to process event. Error: {e}");
+                    }
+                },
+                _ = poll_sleep.sleep() => {
+                    if let Err(e) = self.process_pending_stack_packets().await {
+                        warn!("Failed to process virtual interface packets. Error: {e}");
                     }
                 },
                 _ = token.cancelled() => {
